@@ -1,0 +1,21 @@
+---
+title: "Download Pseudo-Proxies and Instruments"
+author: "Nicholas N. Nagle"
+date: "January 23, 2015"
+output: html_document
+---
+
+```{r}
+data_dir <- '/Users/nicholasnagle/Dropbox/git_root/climate-bayes/data/'
+wget_bin <- '/opt/local/bin/wget'
+```
+The NCDC page for the pseudo data is [here](https://www.ncdc.noaa.gov/cdo/f?p=519:1:::::P1_study_id:13341)
+
+The data are described [here](http://www1.ncdc.noaa.gov/pub/data/paleo/pr-challenge/Mann/readme-pr-challenge.txt)
+
+Get the data:
+```{r}
+wget.cmd <- sprintf('%s -P %s  http://www1.ncdc.noaa.gov/pub/data/paleo/pr-challenge/pr-challenge.tar', wget_bin, data_dir)
+
+system(wget.cmd)
+```

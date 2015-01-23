@@ -1,0 +1,5 @@
+packrat/lib*/
+packrat/*
+data/*
+.Rproj.user
+*.tex
