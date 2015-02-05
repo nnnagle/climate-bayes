@@ -1,0 +1,109 @@
+---
+title: "CCA analysis of pseudo-Proxy.data."
+author: "Nicholas N. Nagle"
+date: "January 23, 2015"
+output: pdf_document
+---
+
+
+```{r}
+data_dir <- '/Users/nicholasnagle/Dropbox/git_root/climate-bayes/data/www.ldeo.columbia.edu/~jsmerdon/2011_grl_supplement/data'
+```
+
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(rworldmap)
+library(rgeos)
+```
+
+```{r}
+# Load the target field value
+targetfield <- read.table(file.path(data_dir, 'CCSM_targetfield.dat'))
+names(targetfield) <- c('year', paste('LOC_',sprintf('%04i', 1:1732), sep=''))
+# load the target field coords
+targetcoord <- read.table(file.path(data_dir, 'locs_target.dat'))
+names(targetcoord) <- c('Lon','Lat')
+targetcoord$ID <-  as.factor(paste('LOC_',sprintf('%04i', 1:1732), sep=''))
+
+
+# Melt the targetfield object
+field <- gather(targetfield, ID, Temp, -year)
+field <- left_join(field, targetcoord)
+
+```
+
+
+```{r}
+map.world <- map_data(map="world")
+filter(field, year==850) %>% ggplot() + geom_raster(aes(x=Lon, y=Lat, fill=Temp))+coord_equal() +
+  geom_path(data=map.world, aes(x=long, y=lat, group=group))
+```
+
+
+```{r}
+proxydat <- read.table(file.path(data_dir, 'CCSM_PNAS_pprox00.dat'))
+proxylocs <- read.table(file.path(data_dir, 'locs_pprox_PNAS.dat'))
+names(proxylocs) <- c('Lat', 'Lon')
+proxylocs$PID <- as.factor(paste('P_',sprintf('%03i', 1:283), sep=''))
+names(proxydat) <- c('year', paste('P_', sprintf('%03i', 1:283), sep=''))
+proxydat <- proxydat %>% gather(., PID, temp, -year) %>% left_join(., proxylocs)
+```
+
+
+```{r}
+T <- field %>% select(year, ID, Temp) %>% 
+  filter(year>=1850) %>% spread(ID, Temp) %>% select(-year) %>% as.matrix %>% t
+
+P <- proxydat %>% select(c(year, PID, temp)) %>% 
+  filter(year>=1850) %>% spread(PID, temp) %>% select(-year) %>% as.matrix %>% t
+
+# sweep out the means and standard deviations
+Mt <- rowMeans(T)
+Mp <- rowMeans(P)
+St <- apply(T, 1, sd)
+Sp <- apply(P, 1, sd)
+T_ <- T %>% sweep(1, Mt, '-') %>% sweep(1, St, '/')
+P_ <- P %>% sweep(1, Mp, '-') %>% sweep(1, Sp, '/')
+
+# Calculate the first svds
+T_.svd <- svd(T_)
+P_.svd <- svd(P_)
+
+# trucate svd function
+truncate_svd <- function(svd,k){
+  svd$d <- svd$d[1:k]
+  svd$u <- svd$u[,1:k]
+  svd$v <- svd$v[,1:k]
+  return(svd)
+}
+
+T_r.svd <- truncate_svd(T_.svd, 100)
+P_r.svd <- truncate_svd(P_.svd, 100)
+
+cca.svd <- svd(t(T_r.svd$v) %*% P_r.svd$v)
+cca_r.svd <- truncate_svd(cca.svd, 80)
+
+# Calculate the cca weights:
+Wt <- T_r.svd$u %*% diag(1/T_r.svd$d) %*% cca_r.svd$u
+Wp <- P_r.svd$u %*% diag(1/P_r.svd$d) %*% cca_r.svd$v
+
+# Calculate cca coefficients
+C_t <- T_r.svd$u %*% diag(T_r.svd$d) %*% cca_r.svd$u # cca temperature patterns in cols
+B_cca <- C_t %*% diag(cca_r.svd$d) %*% t(Wp)
+
+# Calculate cca time series
+Qt <- t(T_) %*% Wt
+Qp <- t(P_) %*% Wp
+
+# all.equal(t(Qt) %*% Qp, diag(cca_r.svd$d)) # Sanity check, 
+T_pred <- diag(St) %*% B_cca %*% diag(Sp^-1) %*% sweep(P, 1, Mp, '-')
+T_pred <- sweep(T_pred, 1, Mt, '+')
+
+```
+
+
+

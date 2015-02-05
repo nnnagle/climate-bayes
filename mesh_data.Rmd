@@ -1,0 +1,88 @@
+
+```{r}
+data_dir <- '/Users/nicholasnagle/Dropbox/git_root/climate-bayes/data/www.ldeo.columbia.edu/~jsmerdon/2011_grl_supplement/data'
+```
+
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(rworldmap)
+library(rgeos)
+library(INLA)
+```
+
+```{r}
+# Load the target field value
+targetfield <- read.table(file.path(data_dir, 'CCSM_targetfield.dat'))
+names(targetfield) <- c('year', paste('LOC_',sprintf('%04i', 1:1732), sep=''))
+# load the target field coords
+targetcoord <- read.table(file.path(data_dir, 'locs_target.dat'))
+names(targetcoord) <- c('Lon','Lat')
+targetcoord$ID <-  as.factor(paste('LOC_',sprintf('%04i', 1:1732), sep=''))
+
+
+# Melt the targetfield object
+field <- gather(targetfield, ID, Temp, -year)
+field <- left_join(field, targetcoord)
+
+```
+
+
+```{r}
+map.world <- map_data(map="world")
+filter(field, year==850) %>% ggplot() + geom_raster(aes(x=Lon, y=Lat, fill=Temp))+coord_equal() +
+  geom_path(data=map.world, aes(x=long, y=lat, group=group))
+```
+
+
+```{r}
+proxydat <- read.table(file.path(data_dir, 'CCSM_PNAS_pprox00.dat'))
+proxylocs <- read.table(file.path(data_dir, 'locs_pprox_PNAS.dat'))
+names(proxylocs) <- c('Lat', 'Lon')
+proxylocs$PID <- as.factor(paste('P_',sprintf('%03i', 1:283), sep=''))
+names(proxydat) <- c('year', paste('P_', sprintf('%03i', 1:283), sep=''))
+proxydat <- proxydat %>% gather(., PID, temp, -year) %>% left_join(., proxylocs)
+```
+
+```{r}
+# Turn locations from lat lon into 3D
+latlon <- filter(proxydat, year==850) %>% select( c(Lat,Lon))
+latlon <- latlon %>% transmute(lat=Lat/180*pi, lon=Lon/180*pi) %>% 
+  transmute(X1=cos(lat)*cos(lon), X2=cos(lat)*sin(lon), X3=sin(lat))
+
+mesh <- inla.mesh.create(loc=latlon)
+
+# plot the proxy locations
+proxydat %>% filter(year==850) %>% 
+  ggplot() + geom_point(aes(x=Lon, y=Lat))
+
+# plot the clmate locations
+field %>% filter(year==850) %>%
+  ggplot() + geom_point(aes(x=Lon, y=Lat))
+
+
+# Create a spherical mesh
+mesh2  <- proxydat %>% filter(year==850) %>% select(c(Lat,Lon)) %>% 
+  inla.mesh.map(projection='longlat') %>% inla.mesh.2d(loc=., max.edge=.5)
+
+# Reproject the mesh points to lat lon
+temp <- inla.mesh.map(mesh2$loc, projection='longlat', inverse=FALSE) %>% as.data.frame
+names(temp) <- c('Lon', 'Lat')
+temp %>% ggplot() + geom_point(aes(x=Lon, y=-Lat))
+
+mesh2 %>% inla.mesh.projector -> temp
+ggplot(data.frame(x=temp$x, y=temp$y)) + geom_point(aes(x=x, y=y))
+
+basis = inla.mesh.basis(mesh2, type="sph.harm", n=c(6))
+
+proj = inla.mesh.projector(mesh2)
+image(proj$x, proj$y, inla.mesh.project(proj, basis[,6]))
+plot(proj$x, proj$y)
+
+temp <- inla.mesh.map(mesh2$loc, projection='longlat', inverse = FALSE)
+plot(temp[,1], -temp[,2])
+plot(inla.mesh.map(mesh2$loc, projection='longlat', inverse = FALSE)[,c(2,1)])
+```

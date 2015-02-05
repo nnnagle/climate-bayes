@@ -1,0 +1,21 @@
+---
+title: "Download Pseudo-Proxies and Instruments from Smerdon"
+author: "Nicholas N. Nagle"
+date: "January 23, 2015"
+output: html_document
+---
+
+
+
+These data were used in:
+Smerdon, J.E., A. Kaplan, E. Zorita, J. F. González-Rouco, and M. N. Evans, 2011: Spatial Performance of Four Climate Field Reconstruction Methods Targeting the Common Era, Geophysical Research Letters, 38, L11705, doi:10.1029/2011GL047372.
+
+and are available [here](http://www.ldeo.columbia.edu/~jsmerdon/2011_grl_supplement.html)
+
+```{r}
+data_dir <- '/Users/nicholasnagle/Dropbox/git_root/climate-bayes/data/'
+wget_bin <- '/opt/local/bin/wget'
+
+wget.cmd <- sprintf('%s -P %s -np -R "index.html*" -r  http://www.ldeo.columbia.edu/~jsmerdon/2011_grl_supplement/data/', wget_bin, data_dir)
+system(wget.cmd)
+```
