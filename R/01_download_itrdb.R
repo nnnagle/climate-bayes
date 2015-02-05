@@ -1,16 +1,21 @@
 # download the tree ring data and process
 library("dplR")
 library('dplyr')
-dir.create("~/Dropbox/git_root/climate-bayes/data/itrdb")
-download.file(url="http://www1.ncdc.noaa.gov/pub/data/paleo/treering/chronologies/itrdb-v705-usa-crn.zip",
-              destfile="~/Dropbox/git_root/climate-bayes/data/itrdb-usa.zip")
-unzip("~/Dropbox/git_root/climate-bayes/data/itrdb-usa.zip", 
-      exdir="~/Dropbox/git_root/climate-bayes/data/itrdb")
+library('fields')
+library('ggplot2')
 
-download.file(url="http://www1.ncdc.noaa.gov/pub/data/paleo/treering/chronologies/itrdb-v705-canada-crn.zip",
-              destfile="~/Dropbox/git_root/climate-bayes/data/itrdb-canada.zip")
-unzip("~/Dropbox/git_root/climate-bayes/data/itrdb-canada.zip", 
-      exdir="~/Dropbox/git_root/climate-bayes/data/itrdb")
+if(length(list.files('~/Dropbox/git_root/climate-bayes/data/itrdb')) == 0){
+  dir.create("~/Dropbox/git_root/climate-bayes/data/itrdb")
+  download.file(url="http://www1.ncdc.noaa.gov/pub/data/paleo/treering/chronologies/itrdb-v705-usa-crn.zip",
+                destfile="~/Dropbox/git_root/climate-bayes/data/itrdb-usa.zip")
+  unzip("~/Dropbox/git_root/climate-bayes/data/itrdb-usa.zip", 
+        exdir="~/Dropbox/git_root/climate-bayes/data/itrdb")
+  download.file(url="http://www1.ncdc.noaa.gov/pub/data/paleo/treering/chronologies/itrdb-v705-canada-crn.zip",
+                destfile="~/Dropbox/git_root/climate-bayes/data/itrdb-canada.zip")
+  unzip("~/Dropbox/git_root/climate-bayes/data/itrdb-canada.zip", 
+        exdir="~/Dropbox/git_root/climate-bayes/data/itrdb")
+}
+
 
 read.crn.head <- function(fname){
   header <- readLines(fname, n=4)
@@ -48,7 +53,32 @@ which(table(df$species_code)>20)
 df %>% filter( species_code %in% names(table(df$species_code))[table(df$species_code)>20] ) -> df.clean
 
 # Plot the lat/lon again.
-temp2 %>% ggplot() + geom_point(aes(x=-lon, y=lat, color=species_code))
+df.clean %>% ggplot() + geom_point(aes(x=-lon, y=lat, color=species_code))
+
+df.clean %>% transmute(lon=-lon, lat=lat) %>% as.matrix %>% rdist.earth( miles=FALSE ) -> dist.matrix
+diag(dist.matrix) <- NaN
+# Create unique IDs also
+dimnames(dist.matrix) <- list(1:nrow(df.clean), 1:nrow(df.clean))
+min.dist <- apply(dist.matrix, 1, min, na.rm=TRUE)
+last.year <- as.numeric(df.clean$last)
+names(last.year) <- 1:nrow(df.clean)
+
+# While loop through the data, finding pairs that are less than .5 km away.
+# At each iteration, find the record, with the most recent trees, and eliminate everything within .5 km. and repeat until none are left
+
+while(min(min.dist) < .5 ){
+  small.dist <- which(min.dist < .5)
+  latest.record <- which.max((last.year[small.dist]))
+  drop.ids <- which(dist.matrix[names(latest.record),]<.5) # Find sites within .5 km
+  # Drop those sites
+  dist.matrix <- dist.matrix[-drop.ids, -drop.ids]
+  min.dist <- apply(dist.matrix, 1, min, na.rm=TRUE)
+  last.year <- last.year[-drop.ids]
+}
+
+# Now filter df.clean based on the remaining locs.
+df.clean <- df.clean[as.numeric(names(min.dist)),]
 
 
+df.clean %>% filter(first<0) %>% transmute(lon=-lon, lat=lat) %>% as.matrix %>% rdist.earth( miles=FALSE ) -> dist.matrix
 
