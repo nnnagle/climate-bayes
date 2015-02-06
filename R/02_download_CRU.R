@@ -1,21 +1,23 @@
 library(R.utils)
 
-dir.create("~/Dropbox/git_root/climate-bayes/data/crutm")
-dir.create("~/Dropbox/git_root/climate-bayes/data/crutm/anomalies")
-dir.create("~/Dropbox/git_root/climate-bayes/data/crutm/nobs")
+if(!file.exists('~/Dropbox/git_root/climate-bayes/data/crutm/anomalies/CRUTM.anomalies.txt')){
+  dir.create("~/Dropbox/git_root/climate-bayes/data/crutm")
+  dir.create("~/Dropbox/git_root/climate-bayes/data/crutm/anomalies")
+  dir.create("~/Dropbox/git_root/climate-bayes/data/crutm/nobs")
+  
+  
+  download.file(url='http://www.metoffice.gov.uk/hadobs/crutem4/data/gridded_fields/CRUTEM.4.3.0.0.anomalies.txt.gz',
+                destfile="~/Dropbox/git_root/climate-bayes/data/CRUTM.anomalies.txt.gz")
+  gunzip("~/Dropbox/git_root/climate-bayes/data/CRUTM.anomalies.txt.gz",
+         destname="~/Dropbox/git_root/climate-bayes/data/crutm/anomalies/CRUTM.anomalies.txt")
+}
 
-
-download.file(url='http://www.metoffice.gov.uk/hadobs/crutem4/data/gridded_fields/CRUTEM.4.3.0.0.anomalies.txt.gz',
-              destfile="~/Dropbox/git_root/climate-bayes/data/CRUTM.anomalies.txt.gz")
-gunzip("~/Dropbox/git_root/climate-bayes/data/CRUTM.anomalies.txt.gz",
-      destname="~/Dropbox/git_root/climate-bayes/data/crutm/anomalies/CRUTM.anomalies.txt")
-
-
-download.file(url='http://www.metoffice.gov.uk/hadobs/crutem4/data/gridded_fields/CRUTEM.4.3.0.0.nobs.txt.gz',
-              destfile="~/Dropbox/git_root/climate-bayes/data/CRUTEM.4.3.0.0.nobs.txt.gz")
-gunzip("~/Dropbox/git_root/climate-bayes/data/CRUTEM.4.3.0.0.nobs.txt.gz",
-      destname="~/Dropbox/git_root/climate-bayes/data/crutm/nobs/CRUTM.nobs.txt")
-
+if(!file.exists("~/Dropbox/git_root/climate-bayes/data/crutm/nobs/CRUTM.nobs.txt")){
+  download.file(url='http://www.metoffice.gov.uk/hadobs/crutem4/data/gridded_fields/CRUTEM.4.3.0.0.nobs.txt.gz',
+                destfile="~/Dropbox/git_root/climate-bayes/data/CRUTEM.4.3.0.0.nobs.txt.gz")
+  gunzip("~/Dropbox/git_root/climate-bayes/data/CRUTEM.4.3.0.0.nobs.txt.gz",
+         destname="~/Dropbox/git_root/climate-bayes/data/crutm/nobs/CRUTM.nobs.txt")
+}
 options(warn=2)
 anom.txt <- readLines("~/Dropbox/git_root/climate-bayes/data/crutm/anomalies/CRUTM.anomalies.txt")
 # Save into a 3D array of lat,lon, time
@@ -36,8 +38,9 @@ for( r in 1:length(anom.txt)){
 }
 anomalies[anomalies< -1000] <- NA
 nyears <- ceiling(num.times / 12)
-dimnames(anomalies) <- list(paste(rep(seq(1850, length=nyears), each=12), rep(seq(1,12), time=nyears), '01', sep='-'),
-                         lat, lon)
+dimnames(anomalies) <- list(time=paste(rep(seq(1850, length=nyears), each=12), 
+                                       rep(sprintf('%02i', seq(1,12)), time=nyears), '01', sep='-'),
+                            lat=lat, lon=lon)
 rm(anom.txt)
 
 nobs.txt <- readLines("~/Dropbox/git_root/climate-bayes/data/crutm/nobs/CRUTM.nobs.txt")
@@ -53,8 +56,9 @@ for( r in 1:length(nobs.txt)){
 }
 nobs[nobs< -1000] <- NA
 nyears <- ceiling(num.times / 12)
-dimnames(nobs) <- list(paste(rep(seq(1850, length=nyears), each=12), rep(seq(1,12), time=nyears), '01', sep='-'),
-                            lat, lon)
+dimnames(nobs) <- list(time=paste(rep(seq(1850, length=nyears), each=12), 
+                                  rep(sprintf('%02i', seq(1,12)), time=nyears), '01', sep='-'),
+                       lat=lat, lon=lon)
 rm(nobs.txt)
 
 save(nobs, anomalies, file="/Users/nnagle/Dropbox/git_root/climate-bayes/data/CRU.Rdata")

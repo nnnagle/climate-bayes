@@ -20,7 +20,7 @@ if(length(list.files('~/Dropbox/git_root/climate-bayes/data/itrdb')) == 0){
 read.crn.head <- function(fname){
   header <- readLines(fname, n=4)
   crn <- try(dplR::read.crn(fname))
-  if(class(crn)!='try-error')
+  if(class(crn)[1]!='try-error')
     return(data_frame(site_id=substr(header[[1]],1,6),
                       site_name=substr(header[[1]], 10, 61),
                       species_code=substr(header[[1]], 61, 65),
@@ -81,4 +81,18 @@ df.clean <- df.clean[as.numeric(names(min.dist)),]
 
 
 df.clean %>% filter(first<0) %>% transmute(lon=-lon, lat=lat) %>% as.matrix %>% rdist.earth( miles=FALSE ) -> dist.matrix
+
+tree.meta <- df.clean
+crn <- lapply(tree.meta$fname, read.crn)
+
+# Further filter to remove dplr crn files without sample depths.  
+#(It looks like these might be chronologies with sample depth 1)
+keepers <- which(sapply(crn, ncol)==2)
+crn <- crn[keepers]
+tree.meta <- tree.meta[keepers,]
+save(tree.meta, crn, file="/Users/nnagle/Dropbox/git_root/climate-bayes/data/itrdb_meta.Rdata")
+rm(list=ls())
+
+
+
 
