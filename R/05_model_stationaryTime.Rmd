@@ -1,0 +1,61 @@
+---
+title: "Model_stationaryTime"
+author: "Nicholas Nagle"
+date: "February 8, 2015"
+output: html_document
+---
+
+We assume that Temperature $\alpha_t$ follows a stationary AR(1) process, with spatial autocorrelation at time t.
+
+$$alpha_{t+1} = \mu + \rho (\alpha_t - \mu) + H_t u_t;\quad \mbox{for $t=1,\ldots, T-1$.}$$
+The measurement models are:
+$$y_t = X_t\beta + Z_t \alpha + G_t u_t;\quad \mbox{$t=1,\ldots,T $}$$
+$$\alpha_1 \sim N(\mu_1, P_1),\quad u_t\sim i.i.d. N(0, I)$$
+
+Hence, $\eta_t=H_t u_t \sim N(0, H_tH_t^T)$ and $\epsilon_t u_t = G_t u_t \sim N(0, G_t, G_t^T)$.  In general, the covariance matrices $\Sigma_{\epsilon_t}=G_tG_t^T$ and $\Sigma_{\eta_t}=H_TH_t^T$ will be dense.  This will not be a problem since we will not be explicitly calculating $G_t$ and $H_t$, but, rather will work with sparse precision matrices.
+
+
+I will assume that $G_t$ and $H_t$ are orthogonal.  The algorithm might be adapted for otherwise, but the previous literature has tended to make this assumption and I will continue to assume that here.
+
+Define:
+$$A_t = \begin{bmatrix}G_t G_t^T & G_t H_t^T \\ H_t G_t^T & H_t H_t^T\end{bmatrix}^{-1}=\begin{bmatrix}A_{11,t} & A_{12,t} \\ A_{21,t} & A_{22,t}\end{bmatrix}$$
+
+By assumption: $A_{12,t}=A_{21,t}^T=0$.
+
+Also, we will assume that $var(\epsilon_t) = A_{11,t}^{-1}$ is diagonal, with variance that is inversely proportional (precision that is proportional) to the sample depth.
+
+
+We can write the log conditional density as:
+$$\log f(\alpha\ |\ y) = -\frac{1}{2}\left[A^T \Omega\alpha - 2 c^T \alpha\right] + k$$
+also:
+$$\log f(\alpha\ |\ y) = \log f(\alpha, y) - \log f(t) = -\frac{1}{2}g(\alpha, y) + k'$$
+where
+
+$$g(\alpha,y) = (\alpha_1-\mu_1)^TP_1^{-1}(\alpha_1-\mu_1) + 
+\sum_{t=1}^{n-1}\begin{bmatrix}y_t - X_t\beta - Z_t\alpha_t \\ \alpha_{t+1} - W_t\beta - T \alpha_t \end{bmatrix}^T A\begin{bmatrix}y_t - X_t\beta - Z_t\alpha_t \\ \alpha_{t+1} - W_t\beta - T \alpha_t \end{bmatrix} $$
+$$+(y_N - X_N\beta - Z_N\alpha_N)^T (G_NG_N^T)^{-1}(y_N - X_N\beta - Z_N\alpha_N)$$
+
+In this notation:
+$$\alpha_{t_1} = W_t\beta + T_t \alpha{t}$$
+$$\alpha_{t+1} = \mu + \rho(\alpha_t - \mu)$$
+$$\alpha_{t+1} = (1-\rho)\mu + \rho alpha_t $$
+Thus, $\beta$ includes $\mu$, and $W_t$ selects out $\mu$ and weights by $1-\rho$.
+$T_t$ selects out the previous time $t$ and weights by $\rho$
+
+Following McCausland et al.: we can follow the algorithm:
+
+
+Algorithm:
+
+1. $\Omega_{11} = Z_1^T A_{11,1} Z_1 + T_1^TA_{22,1}T_1 + P_1^{-1}$
+2. For $t=2,\ldots T-1$
+$$\Omega_{tt} = Z_t^T A_{11,t} Z_t + T_t^TA_{22,t}T_t + A_{22,t-1}$$
+3. $\Omega_{TT} = Z_T^T (G_NG_N^T)^{-1} Z_T + A_{22,T-1}$
+4. For $t=1,\ldots T-1 $
+$\Omega_{t,,t+1} = -T_t^T A_{22,t}$
+5. $c_1 = (Z_1^T A_{11,1})(y_1-X_1\beta) - T_1^TA_{22,1}W_1\beta + P_1^{-1}a_1$
+6. For $t=2,\ldots T-1$
+$$ (Z_t^T A_{11,t})(y_t-X_t\beta) - T_t^TA_{22,t}W_t\beta + A_{22,t-1}(W_{t-1}\beta)$$
+7. $c_T = Z_T^T (G_TG_T)^{-1}(y_T-X_t\beta) + A_{22,T-1} W_{T-1}\beta$
+
+1. Compute Cholesky $\Omega_{11} = \Lambda_1\Lambda_1^t$ and 

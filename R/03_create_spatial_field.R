@@ -6,7 +6,10 @@ load('~/Dropbox/git_root/climate-bayes/data/CRU.Rdata')
 load('~/Dropbox/git_root/climate-bayes/data/itrdb_meta.Rdata')
 
 # Create the spatial grid:
-anom.df <- reshape2::melt(anomalies, value.name='precip')
+anom.df <- reshape2::melt(anomalies, stringsAsFactors=FALSE, value.name='precip')
+anom.df$time <- as.character(anom.df$time)
+nobs.df <- reshape2::melt(nobs, stringsAsFactors=FALSE, value.name='nobs')
+nobs.df$time <- as.character(nobs.df$time)
 
 # Extract distinct coords in north america
 anom.df %>% select(lat, lon) %>% distinct %>% filter(lat < 70 & lat>30 & lon < -50 & lon>-165) -> spatial.coords
@@ -20,14 +23,18 @@ min.dist <- apply(dist.matrix, 1, min)
 spatial.coords %>% filter(min.dist<300) %>% ggplot() + geom_point(aes(x=lon, y=lat)) + 
   geom_point(data=tree.meta, aes(x=lon2, y=lat, color=species_code)) + coord_map()
 
-spatial.coords <- spatial.coords %>% filter(min.dist<300)
+spatial.coords <- spatial.coords %>% filter(min.dist<300) %>% arrange(lat, lon)
+
+# Add a spatial_ID
+spatial.coords$SID <- seq(1:nrow(spatial.coords))
 
 # Filter the climate data down to these locations
 anom.df <- inner_join(anom.df, spatial.coords)
-  
-# Create the weights matrix
-latlon <- spatial.coords %>% transmute(lat=lat/180*pi, lon=lon/180*pi) %>% 
-  transmute(X1=cos(lat)*cos(lon), X2=cos(lat)*sin(lon), X3=sin(lat))
+nobs.df <- inner_join(nobs.df, spatial.coords)
+
+# Save the filtered anomaly data:
+save(anom.df, nobs.df, file='~/Dropbox/git_root/climate-bayes/data/anomaly.Rdata')
+
 
 # convert lat lon to 3d coordinates:
 loc.cartesian <- inla.mesh.map(spatial.coords[, c('lon', 'lat')], projection='longlat')
@@ -44,7 +51,14 @@ proj2a = inla.mesh.projector(mesh2, projection="longlat", dims=c(361,181))
 proj2b = inla.mesh.projector(mesh2, projection="longsinlat", dims=c(361,181))
 proj2c = inla.mesh.projector(mesh2, projection="mollweide", dims=c(361,181))
 
+# Create the projection matrices
+A.precip <- inla.spde.make.A(mesh=mesh2, loc=loc.cartesian)
+A.tree <- inla.spde.make.A(mesh=mesh2, 
+                           loc=inla.mesh.map(as.matrix(tree.meta[, c('lon2', 'lat')]), 
+                                             projection='longlat'))
 
+# save spatial matrices:
+save(A.tree, A.precip, spde2, mesh2, spatial.coords, file='~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
 
 ###################################################
 ### code chunk number 30: proj2a

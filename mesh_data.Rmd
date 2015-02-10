@@ -59,7 +59,7 @@ mesh <- inla.mesh.create(loc=latlon)
 proxydat %>% filter(year==850) %>% 
   ggplot() + geom_point(aes(x=Lon, y=Lat))
 
-# plot the clmate locations
+# plot the climate locations
 field %>% filter(year==850) %>%
   ggplot() + geom_point(aes(x=Lon, y=Lat))
 
