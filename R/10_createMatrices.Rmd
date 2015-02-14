@@ -55,7 +55,7 @@ $$\boldsymbol{\alpha}_t = \mu(1-\rho)\boldsymbol{1} + \rho \boldsymbol{\alpha}_{
 where $\boldsymbol{\epsilon}_t\sim N(\mathbf{0}, \boldsymbol{\Sigma}_\epsilon)$ for all time periods $t$.  
 
 We will assume a GMRF so that $\boldsymbol{\Sigma}_\epsilon^{-1}=\mathbf{Q}$ is sparse and has parameters $\boldsymbol{\theta}_\epsilon$.
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 ##
 # Parameters for the spde:
 sigma0 <- .2 # standard deviation
@@ -68,7 +68,20 @@ spde1 <- inla.spde2.matern(mesh=mesh2,
                            B.tau=cbind(log(tau0),1,0),
                            B.kappa=cbind(log(kappa0), 0, 1),
                            theta.prior.mean=c(0,0),
-                           theta.prior.prec=c(.1,1))
+                           theta.prior.prec=c(1,1))
+```
+
+Evaluate a good prior for theta.  I want to make sure that theta translates into good values for sigma and range:
+
+```{r eval=TRUE}
+data.frame(theta1=rnorm(1000,0, sd=1/1), theta2=rnorm(1000, 0, 1/1)) %>% 
+  mutate(logtau=(log(tau0)+theta1), logkappa=(log(kappa0)+theta2)) %>%
+  mutate(range= sqrt(8)/exp(logkappa), sigma=1/(sqrt(4*pi)*exp(logtau+logkappa))) %>%
+  dplyr::select(range, sigma) %>% summary
+```
+That seems good.
+
+```{r}
 # Set precision:
 Q <- inla.spde2.precision(spde1, theta=c(0,0))
 LQ <- Cholesky(Q)
@@ -80,23 +93,40 @@ The Instrument and Proxy data follow the model
 $$\mathbf{Y}_t = \mathbf{X}_t\boldsymbol{\beta_0} + \mathbf{Z}_t\boldsymbol{\alpha}_t + \boldsymbol{\nu}_t$$
 where $\boldsymbol{\nu}_t \sim N(\mathbf{0}, \boldsymbol{\Sigma}_{\nu, t})$.  We assume that $\boldsymbol{\Sigma}_{\nu, t}$ is diagonal with parameters $\boldsymbol{\theta}_\eta$. $\boldsymbol{\theta}_\eta$ contains $\sigma^2_{ps}$ for each proxy species and $\sigma^2_i$ for an instrument record.   
 
-The instruments have the model: $y_t = A\alpha_t + \nu_t$, where $A$ is the spatial basis matrix that translates spatial climate grid points to instrument locations.  We can thus write that $\mathbf{X}_t=\mathbf{0}$ and $\mathbf{Z}_t = \mathbf{A}_t$
+The instruments have the simple model: $y_t = A\alpha_t + \nu_t$, where $A$ is the spatial basis matrix that translates spatial climate grid points to instrument locations.  We can thus write that $\mathbf{X}_t=\mathbf{0}$ and $\mathbf{Z}_t = \mathbf{A}_t$
 
+```{r}
+# Z = A.precip
+Z <- A.precip
+```
 The tree proxies have the model: $y_t = \beta_{0s} + \beta_{1s}A\alpha_t + \nu_t$, where again $A$ is a matrix that translates spatial climate grid points to a tree proxy location (hence, $A\alpha$ is the climate at the tree location).
 
 ## Prior Level:
 ### prior on $\boldsymbol{\alpha}_1$
-$\boldsymbol{\alpha}_1 \sim N(\boldsymbol{\mu}_0, \boldsymbol{\Sigma}_0)$.  We set $\mu_0=0$ and $\boldsymbol{\Sigma}_0)=\sigma^2_0\mathbf{I}$, where $\sigma^2_0=2^2$ or some other value suitable to weakly constrain the range of the beginning temperature field.
+$\boldsymbol{\alpha}_1 \sim N(\boldsymbol{\mu}_1, \boldsymbol{\Sigma}_1)$.  We set $\mu_1=0$ and $\boldsymbol{\Sigma}_1)=\sigma^2_1\mathbf{I}$, where $\sigma^2_1=2^2$ or some other value suitable to weakly constrain the range of the beginning temperature field.
 
+```{r alpha 1 prior}
+mu_1 <- 0
+sigma_sq_1 <- 4
+```
 
 ### prior on $\rho$
 $\rho\sim U(0,1)$.
 
 ### prior on $\mu$
 $\mu\sim N(\mu_0, \sigma^2_\mu)$. we set the prior mean of the climate field to have mean $\mu_0=0$ and the standard deviation to $\sigma^2_\mu=5$.  This is a large prior and should not dominate the posterior.
+```{r}
+mu_0 = 0
+sigma_sq_mu = 5
+```
 
 ### prior on $\sigma^2_I$
 $\sigma^2_I \sim IG(\lambda_I, \nu_I)$, i.e. $P(\sigma^2_I) \propto (\sigma^2_I)^{-(\lambda_I+1)}\exp(\nu_I/\sigma^2_I)$.  Following Tingley and Gelman, this prior corresponds to $2 \lambda_I$ observations with average squared deviation $(\nu_I / \lambda_I)$.  We set each to $.5$.
+
+```{r prior on siga sq Instrument}
+nu_I <- .5
+lambda_I <- .5
+```
 
 ### prior on $\sigma^2_{Ps}$
 Same as for $\sigma^2_I$.
@@ -139,91 +169,256 @@ $\tau$ and $\kappa$ don't have a closed form posterior distribution.
 $$\propto\log \pi(\boldsymbol{\Theta})- \frac{n-1}{2}\log|Q(\boldsymbol{\Theta})|-
 \frac{1}{2}\sum_{t=1}^{n-1}(\boldsymbol{\alpha}_{t+1}-\mu\mathbf{1} - \rho(\boldsymbol{\alpha}_{t}-\mu\mathbf{1}))^T\mathbf{Q}(\boldsymbol{\Theta})(\boldsymbol{\alpha}_{t+1}-\mu\mathbf{1} - \rho(\boldsymbol{\alpha}_{t}-\mu\mathbf{1}))$$
 
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 # y has a 106 x 1 vector
 # alpha has a 580 x 1 vector
 # beta is the mean mu of alpha.
 # there is no X.
 # W = (1-rho) * mu
 # T = rho*I
-# Z = A.precip
-Z <- A.precip
-years <- anom.df %>% ungroup %>% distinct(year) %>% arrange(year) %>% mutate(year=as.numeric(year)) %>% .[["year"]]
+years <- anom.df %>% ungroup %>% 
+  distinct(year) %>% arrange(year) %>% 
+  mutate(year=as.numeric(year)) %>% .[["year"]]
 N <- length(years)
-# A11 is diagonal
-sigma_y <- 1 # std dev matrix of precipitation data
-# The var of a tile is sigma^2/nobs
-tau_y <- 1/sigma_y
-# A22 is Q
+Size <- mesh2$n
 
-###############################################################################
-A11 <- vector(mode='list', length=N)
-y <- vector(mode='list', length=N)
-data_ids <- vector(mode='list', length=N)
-Omega_tt <- vector(mode='list', length=N)
+# Markov Chain Setup
+NMC <- 200
+# Save the storage objects
+mc <- list(theta = matrix(NA, NMC+1, 2),
+           alpha = array(NA, dim=c(NMC+1, Size, N)),
+           mu = matrix(NA, NMC+1, 1),
+           rho = matrix(NA, NMC+1,1),
+           sigma_I = matrix(NA, NMC+1, 1))
+mc$theta[1,] <- c(0,0)
+mc$alpha[1,,] <- rep(0, Size*N)
+mc$mu[1] <- 0
+mc$rho[1] <- .4
+mc$sigma_I[1] <- 1
+
+# We don't have a precip observation each time period, so let's precompute
+#  which observation exist for each time period
+y <- vector(mode='list', length=N) # the precip data for each time period
+data_ids <- vector(mode='list', length=N) # The IDs for the precip data each period
+nprecip <- vector(mode='list', length=N)
+A11_pre <- vector(mode='list', length=N) # A11 is the precision matrix of the data.  It
+# depends on the number of observations.  It is the A11 matrix in McCausland et al 2011
+# !!! A11 NEEDS TO BE MULTIPLIED BY sigma_sq_I AT EACH ITERATION !!!!!!!!!!!!!!!!!!!!!!
 for(i in 1:N){
-  y[[i]] <- anom.df %>% filter(year==years[i]) %>% arrange(SID) %>% filter(is.finite(precip))
+  y[[i]] <- anom.df %>% filter(year==years[i]) %>% 
+    arrange(SID) %>% filter(is.finite(precip))
   data_ids[[i]] <- y[[i]][['SID']]
-  A11[[i]] <- nobs.df %>% filter(year==years[i]) %>% filter(SID %in% y[[i]][['SID']]) %>% .[["nobs"]]/sigma_y
-  A11[[i]] <- .sparseDiagonal(A11[[i]], n=length(A11[[i]]))
+  nprecip[[i]] <- nobs.df %>% filter(year==years[i]) %>% arrange(SID)
+  nprecip[[i]] <- nprecip[[i]][data_ids[[i]], 'nobs']
+  A11_pre[[i]] <- nobs.df %>% filter(year==years[i]) %>% 
+    filter(SID %in% y[[i]][['SID']]) %>% .[["nobs"]]
+  A11_pre[[i]] <- .sparseDiagonal(A11_pre[[i]], n=length(A11_pre[[i]]))
 }
 
-# A22 is Q
-# TA22 is rho*Q*rho
-rho=.8
-TA22 <- rho^2*Q
-
-Omega_tt[[1]] <- t(Z[data_ids[[1]],]) %*% A11[[1]] %*% Z[data_ids[[1]],] + TA22 + Q
-for(t in 2:N-1){
-  Omega_tt[[t]] <- t(Z[data_ids[[t]],]) %*% A11[[t]] %*% Z[data_ids[[t]],] + TA22 + Q
-}
-Omega_tt[[N]] <- t(Z[data_ids[[N]],]) %*% A11[[N]] %*%  Z[data_ids[[N]],] + Q
-
-Omega_t1 <- -rho *Q # Omega_{t,t+1}
-
-mu=0
-Wb <- drop0(matrix((1-rho)*mu, nrow(Q)))
-Q1 <- Q
-a1 <- matrix(0, nrow(Q))
-c <- vector(mode='list', length=N)
-c[[1]] <- t(Z[data_ids[[1]],]) %*% drop0(A11[[1]] %*% (y[[1]]$precip-mu)) - rho*Q %*% Wb + Q1 %*% a1
-for(t in 1:N){
-    c[[t]] <- t(Z[data_ids[[t]],]) %*% drop0(A11[[t]] %*% (y[[t]]$precip-mu)) - rho*Q %*% Wb + Q %*% Wb
-}
-c[[N]] <- t(Z[data_ids[[N]],]) %*% drop0(A11[[N]] %*%y[[N]]$precip) + Q %*% Wb
-
-
-###############################################################################
-Chol_omega <- vector(mode='list', length=N)
-Chol_omega[[1]] <- Cholesky(Omega_tt[[1]])
-# Note, that when following McCausland, that t(Omega_t-1,t) = Omega_t1
-for(t in 2:N){
-  temp <- Omega_tt[[t]] - (Omega_t1) %*% solve(Chol_omega[[t-1]], t(Omega_t1))
-  Chol_omega[[t]] <- Cholesky(drop0(zapsmall(temp)),super=NA)
-}
-
-# LO = Lambda_t \ Omega_t1
-LO <- vector(mode='list', length=N)
-for(t in 1:N){LO[[t]] <- drop0(zapsmall(solve(Chol_omega[[t]], Omega_t1, system='Lt')))}
-
-# OSO = Omega_{t,t+1}^T \Sigma_t Omega_{t,t+1} 
-OSO <- vector(mode='list', length=N)
-for(t in 1:N){OSO[[t]] <- crossprod(LO[[t]])}
-
-m <- vector(mode='list', length=N)
-m[[1]] <- solve(Chol_omega[[1]], c[[1]], system='A')
-for(t in 2:N){
-  m[[t]] <- solve(Chol_omega[[t]], c[[t]] - Omega_t1 %*% m[[t-1]])
-}
-
-alpha <- vector(mode='list', length=N)
-epsilon <- rnorm(n=nrow(Q))
-alpha[[N]] <- m[[N]] + solve(Chol_omega[[N]], epsilon, system='Lt')
-for(t in seq(N-1, 1, -1)){
-  epsilon <- rnorm(n=nrow(Q))
-  alpha[[t]] <- m[[t]] + solve(Chol_omega[[t]], epsilon - LO[[t]] %*% alpha[[t+1]])
-  
-}
-
-plot(colMeans(do.call(cBind,alpha)))
+#####################################
+# Precalculate the spatial precision matrix
+Q <- inla.spde2.precision(spde2, theta=mc$theta[1,])
+# There are a few entries that could be zerod.
+Q <- drop0(zapsmall(Q))
 ```
+
+
+```{r eval=FALSE}
+#######################################################################
+# Markov Chain Loop
+for(mciter in 1:NMC){
+  rho <- mc$rho[mciter]
+  mu <- mc$mu[mciter]
+  sigma_sq_I <- as.numeric(mc$sigma_I[mciter]^2)
+  # Calculate T * A_22 (refer to McCausland)
+  TA22T <- rho^2 * Q
+  # Calculate A11 <- sigma^2_I * A11_pre
+  A11 <- lapply(A11_pre, function(x) sigma_sq_I * x)
+  
+  # Calculate prior variance on alpha1
+  P1 <- .sparseDiagonal(n=Size, x=sigma_sq_1)
+  P1inv <- .sparseDiagonal(n=Size, x=1/sigma_sq_1)
+  
+  #########################################################
+  # Precompute Wbeta and Xbeta
+  Xbeta <- vector(mode='list', length=N)
+  Wbeta <- vector(mode='list', length=N)
+  for(i in 1:N){
+    Xbeta[[i]] <- matrix(0, length(y[[i]]$precip),1)
+    Wbeta[[i]] <- matrix(mu*(1-rho), nrow(Q),1)
+  }
+  
+  
+  
+  #######################################################
+#   # Follow Chan and Jeliazkov for the kalman filter
+#   Sinv <- bdiag(P1inv, kronecker(.sparseDiagonal(n=N-1, x=1), Q))
+#   H <- bandSparse(n=99330, m=99330, k=c(0,-602), diagonals=list(rep(1,99330),rep(-1,99330)))
+#   K <- t(H) %*% Sinv %*% H
+#   G <- vector(mode='list', length=N)
+#   for(t in 1:N) G[[t]] <- Z[data_ids[[t]],]
+#   G <- bdiag(G)
+#   Sig1 <- bdiag(lapply(A11, solve))
+#   P <- K + t(G) %*% Sig1 %*% G
+#   #C <- Cholesky(P) $ T
+#   
+  #########################################################
+  # Precompute the Omega_tt matrices (McCausland Eqn 14)
+  Omega_tt <- vector(mode='list', length=N)
+  Omega_tt[[1]] <- t(Z[data_ids[[1]],]) %*% A11[[1]] %*% Z[data_ids[[1]],] + TA22T + 
+    P1inv
+  for(t in 2:(N-1)){
+    Omega_tt[[t]] <- t(Z[data_ids[[t]],]) %*% A11[[t]] %*% Z[data_ids[[t]],] + TA22T + Q
+  }
+  Omega_tt[[N]] <- t(Z[data_ids[[N]],]) %*% A11[[N]] %*%  Z[data_ids[[N]],] + Q
+  
+  # Precompute Omega_t,t+t
+  Omega_tt1 <- -rho * Q  #(it's the same for every time period)
+  
+  # Precompute c (McCausland eqn 15.)
+  c <- vector(mode='list', length=N)
+  c[[1]] <- t(Z[data_ids[[1]],]) %*% drop0(A11[[1]] %*% (y[[1]]$precip-Xbeta[[1]])) -
+    rho * (Q %*% Wbeta[[1]]) + 
+    P1inv %*% matrix(mu_1, Size,1)
+  for(t in 2:(N-1)){
+    c[[t]] <- t(Z[data_ids[[t]],]) %*% drop0(A11[[t]] %*% (y[[t]]$precip-Xbeta[[t]])) -
+      rho * (Q %*% Wbeta[[t]]) +  (Q %*% Wbeta[[t-1]])
+  }
+  c[[N]] <- t(Z[data_ids[[N]],]) %*% drop0(A11[[N]] %*%y[[N]]$precip-Xbeta[[N]]) +
+    Q %*% Wbeta[[t-1]]
+
+  #########################################################
+
+  Chol_omega <- vector(mode='list', length=N)
+  Chol_omega[[1]] <- Cholesky(Omega_tt[[1]], LDL=FALSE, perm=FALSE)
+  # Note, that when following McCausland, that t(Omega_t-1,t) = Omega_tt1
+  for(t in 2:N){
+    temp <- Omega_tt[[t]] - 
+      (Omega_tt1) %*% solve(Chol_omega[[t-1]], t(Omega_tt1), system='A')
+    temp <- (temp +t(temp))/2
+    # this is the same: but slower:
+    # Omega_tt[[t]] - crossprod(solve(Chol_omega[[t-1]], t(Omega_tt1), system='L'))
+    Chol_omega[[t]] <- Cholesky(((temp)), LDL=FALSE, perm=FALSE)
+    #Chol_omega[[t]] <- chol(as.matrix(temp), permute=TRUE)
+  }
+  
+  
+  # LO = Lambda_t \ Omega_t1
+  LO <- vector(mode='list', length=N)
+  for(t in 1:N){LO[[t]] <- drop0((solve(Chol_omega[[t]], Omega_tt1, system='L')))}
+ 
+  # OSO = Omega_{t,t+1}^T \Sigma_t Omega_{t,t+1} 
+  # OSO is only used for smoothing
+#   OSO <- vector(mode='list', length=N)
+#   for(t in 1:N){OSO[[t]] <- crossprod(LO[[t]])}
+
+  m <- vector(mode='list', length=N)
+  m[[1]] <- solve(Chol_omega[[1]], c[[1]], system='A')
+  for(t in 2:N){
+    m[[t]] <- solve(Chol_omega[[t]], c[[t]] - Omega_tt1 %*% m[[t-1]])
+  }
+
+  #############################################
+  # And here it is... simulate alpha
+  alpha <- vector(mode='list', length=N)
+  epsilon <- rnorm(n=nrow(Q))
+  alpha[[N]] <- m[[N]] + solve(Chol_omega[[N]], epsilon, system='Lt')
+  for(t in seq(N-1, 1, -1)){
+    epsilon <- rnorm(n=nrow(Q))
+    alpha[[t]] <- m[[t]] + solve(Chol_omega[[t]], epsilon - LO[[t]] %*% alpha[[t+1]], system='Lt')
+  }
+  alpha <- as.matrix(do.call(cBind, alpha))
+  
+  mc$alpha[mciter+1, ,] <- alpha
+  
+  ###################################################################
+  # Update mu: the mean of alpha
+  c_mu <- mu_0/sigma_sq_mu + 
+    (1-rho)*sum(sum(Q %*% (alpha[,-1]-rho*alpha[,-N])))
+  V_mu <- 1 / ( 1/sigma_sq_mu + (N-1)*(1-rho)^2 * sum(sum(Q)) )
+  mu <- rnorm(1, V_mu*c_mu, sqrt(V_mu))
+  mc$mu[mciter+1] <- mu
+  
+  ###################################################################
+  # Update rho
+  c_rho <- sum(diag( t(alpha[,-N]-mu) %*% Q %*% (alpha[,-1]-mu)))
+  V_rho <- 1 / sum(apply(alpha[,-N]-mu, 2, function(x) as.numeric(t(x) %*% Q %*% x)))
+  rho <- msm::rtnorm(1, mean=V_rho*c_rho, sd=sqrt(V_rho), lower=0, upper=1)
+  mc$rho[mciter+1] <- rho
+  
+  
+  #################################################################
+  # Update sigma_sq_I
+  Yhat <- vector(mode='list', length=N)
+  for(i in 1:length(Yhat)) Yhat[[i]] <- A.precip[data_ids[[i]],] %*% alpha[,i]
+  SSE <- mapply(function(x,y) sum((x-y)^2), Yhat, lapply(y, function(x) x[['precip']]))
+  nu <- nu_I + sum(mapply(function(x,y) sum(x/(2*y)), SSE, nprecip))
+  lam <- lambda_I + .5*sum(sapply(nprecip, sum))
+  sigma_sq_I <- MCMCpack::rinvgamma(1, lam, nu)
+  mc$sigma_I[mciter+1] <- sqrt(sigma_sq_I)
+  
+  #################################################################
+  # Update theta
+  theta_proposal <- rnorm(2, mean=mc$theta[mciter,], sd=c(.01,.01))
+  Q <- inla.spde2.precision(spde1, theta=mc$theta[mciter,])
+  Q_proposal <- inla.spde2.precision(spde1, theta=theta_proposal)
+  log_prob_old <- (N-1)*determinant(Q, logarithm=TRUE)$modulus - 
+    sum(apply(alpha[,-1]-rho*alpha[,-N]-(1-rho)*mu, 2, 
+              function(x) as.numeric(t(x) %*% Q %*% x)))
+  log_prob_proposal <- (N-1)*determinant(Q_proposal, logarithm=TRUE)$modulus - 
+    sum(apply(alpha[,-1]-rho*alpha[,-N]-(1-rho)*mu, 2, 
+              function(x) as.numeric(t(x) %*% Q_proposal %*% x)))
+  accept <- exp(log_prob_proposal-log_prob_old)
+  c(log_prob_old, log_prob_proposal, accept)
+  if( runif(1) < accept){
+    mc$theta[mciter+1,] <- theta_proposal
+    Q <- Q_proposal
+  } else mc$theta[mciter+1,] <- mc$theta[mciter,]
+
+  #plot(colMeans(do.call(cBind,alpha))-)
+  print(mciter)
+
+}
+
+data.frame(theta1=mc$theta[-1,1], theta2=mc$theta[-1,2]) %>% 
+  mutate(logtau=(log(tau0)+theta1), logkappa=(log(kappa0)+theta2)) %>%
+  mutate(range= sqrt(8)/exp(logkappa), sigma=1/(sqrt(4*pi)*exp(logtau+logkappa))) %>%
+  dplyr::select(range, sigma) %>% summary
+
+library(scales)
+spatial.coords %>% mutate(temp=as.vector(A.precip %*% mc$alpha[20,,20])) %>% 
+  ggplot() + geom_point(aes(x=lon, y=lat, color=temp)) + 
+  scale_color_gradient2(low=muted("blue"), high=muted("red"), midpoint=0) + 
+  coord_map(projection='mollweide')
+```
+
+
+```{r eval=FALSE}
+# library(KFAS)
+# NI <- 
+# y.kfas <- matrix(0, 106, 165)
+# Z.kfas <- array(0, dim=c(165, 602, 106))
+# t.kfas <- diag(rep(1, 602))
+# Q.kfas <- as.matrix(solve(Q))
+# P1.kfas <- diag(rep(4, Size))
+# a1.kfas <- matrix(1, 602, 1)
+# R.kfas <- diag(rep(1,602))
+# 
+# for(t in 1:length(years)){
+#   nobs <- nobs.df %>% filter(year==years[t]) %>% arrange(SID) %>% .[["nobs"]]
+#   nobs[is.na(nobs)] <- 1
+#   H <- sqrt(diag(nobs)* sigma_sq_I)
+#   y.kfas[,t] <- anom.df %>% filter(year==years[t]) %>% arrange(SID) %>% .[["precip"]] - 0
+#   Z.kfas[t,,] <- t(as.matrix(A.precip))
+#   y.kfas[,t] <- y.kfas[,t]/diag(H)
+#   Z.kfas[t,,] <- Z.kfas[t,,] %*% solve(H)
+# }
+# 
+# kmod <- SSModel(y.kfas~SSMcustom(Z=Z.kfas, T=t.kfas, R=R.kfas, Q=Q.kfas, P1=P1.kfas, n=106, a1=rep(0, 602)))
+
+```
+
+
+
+
+

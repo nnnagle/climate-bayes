@@ -38,7 +38,9 @@ save(anom.df, nobs.df, file='~/Dropbox/git_root/climate-bayes/data/anomaly.Rdata
 
 # convert lat lon to 3d coordinates:
 loc.cartesian <- inla.mesh.map(spatial.coords[, c('lon', 'lat')], projection='longlat')
-mesh2 = inla.mesh.2d(loc=loc.cartesian, max.edge=c(.1, .1))
+mesh2 = inla.mesh.2d(loc=loc.cartesian, max.edge=c(.1, .2), offset=c(-1,.2))
+mesh2 = inla.mesh.2d(loc=loc.cartesian, max.edge=c(.1, .3), offset=c(0, -.2), cutoff=.05)
+plot(mesh2)
 proj2b = inla.mesh.projector(mesh2, projection="mollweide")
 
 
@@ -117,27 +119,27 @@ print(llines(lattice.to.plot(latt, "mollweide", 30), col=1))
 trellis.unfocus()
 
 
-
-A.precip <- inla.spde.make.A(mesh=mesh2, loc=loc.cartesian)
-A.tree <- inla.spde.make.A(mesh=mesh2, 
-                           loc=inla.mesh.map(as.matrix(tree.meta[, c('lon2', 'lat')]), 
-                                             projection='longlat'))
-
-B <- inla.mesh.basis(mesh2, type='b.spline', n=3)
-
-plot(mesh2, rgl=TRUE, col=B[,3])
+# 
+# A.precip <- inla.spde.make.A(mesh=mesh2, loc=loc.cartesian)
+# A.tree <- inla.spde.make.A(mesh=mesh2, 
+#                            loc=inla.mesh.map(as.matrix(tree.meta[, c('lon2', 'lat')]), 
+#                                              projection='longlat'))
+# 
+# B <- inla.mesh.basis(mesh2, type='b.spline', n=3)
+# 
+# plot(mesh2, rgl=TRUE, col=B[,3])
 
 #http://people.bath.ac.uk/fl353/isba/isbaspde.R
-##############
-sigma0 = 1   ## Standard deviation
-range0 = 0.2 ## Spatial range
-## Convert into tau and kappa:
-kappa0 = sqrt(8)/range0
-tau0 = 1/(sqrt(4*pi)*kappa0*sigma0)
-## Construct spde object and set priors
-## that will be used by inla().
-spde=inla.spde2.matern(mesh2,
-                       B.tau=cbind(log(tau0),1,0),
-                       B.kappa=cbind(log(kappa0),0,1),
-                       theta.prior.mean=c(0,0),
-                       theta.prior.prec=c(0.1,1))
+# ##############
+# sigma0 = 1   ## Standard deviation
+# range0 = 0.2 ## Spatial range
+# ## Convert into tau and kappa:
+# kappa0 = sqrt(8)/range0
+# tau0 = 1/(sqrt(4*pi)*kappa0*sigma0)
+# ## Construct spde object and set priors
+# ## that will be used by inla().
+# spde=inla.spde2.matern(mesh2,
+#                        B.tau=cbind(log(tau0),1,0),
+#                        B.kappa=cbind(log(kappa0),0,1),
+#                        theta.prior.mean=c(0,0),
+#                        theta.prior.prec=c(0.1,1))
