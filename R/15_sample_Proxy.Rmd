@@ -10,6 +10,7 @@ library(tidyr)
 library(Matrix)
 library(INLA)
 library("mvtnorm")
+library(abind)
 
 # Load the sas data:
 load('~/Dropbox/git_root/climate-bayes/data/anomaly.Rdata')
@@ -96,8 +97,8 @@ design <- sparse.model.matrix(data=measure, ~species - 1)
 
 ```{r}
 # Parameters for the spde:
-sigma0 <- .1 # standard deviation
-range0 <- .5 # range
+sigma0 <- 1 # standard deviation
+range0 <- .8 # range
 # convert into tau and kappa
 kappa0 = sqrt(8)/range0
 tau0 = 1/(sqrt(4*pi)*kappa0*sigma0)
@@ -169,21 +170,21 @@ Size <- mesh2$n
 
 
 # Markov Chain Setup
-NMC <- 2100
+NMC <- 1
 # Save the storage objects
-mc <- list(theta = matrix(NA, NMC+1, 2),
-           alpha = array(NA, dim=c(NMC+1, Size, N)),
-           mu = matrix(NA, NMC+1, 1),
-           beta_0 = matrix(NA, NMC+1, 19), # the first should always be 0, it is the instrument
-           beta_1 = matrix(NA, NMC+1, 19), # the first should always be 1, it is the instrument
-           rho = matrix(NA, NMC+1,1),
-           sigma_y = matrix(NA, NMC+1, 19)) #order matters
+mc <- list(theta = matrix(NA, NMC, 2),
+           alpha = array(NA, dim=c(NMC, Size, N)),
+           mu = matrix(NA, NMC, 1),
+           beta_0 = matrix(NA, NMC, 19), # the first should always be 0, it is the instrument
+           beta_1 = matrix(NA, NMC, 19), # the first should always be 1, it is the instrument
+           rho = matrix(NA, NMC,1),
+           sigma_y = matrix(NA, NMC, 19)) #order matters
 mc$theta[1,] <- c(0,0)
 mc$alpha[1,,] <- rep(0, Size*N)
 mc$mu[1] <- 0
 mc$beta_0[1,] <- c(0, rep(1,18))
 mc$beta_1[1,] <- c(1, rep(0,18))
-mc$rho[1] <- .4
+mc$rho[1] <- .8
 mc$sigma_y[1,] <- c(.5, rep(4, 18))
 
 # We don't have a sas observation each time period, so let's precompute
@@ -205,7 +206,7 @@ for(i in 1:N){
 
 #####################################
 # Precalculate the spatial precision matrix
-Q <- inla.spde2.precision(spde2, theta=mc$theta[1,])
+# Q <- inla.spde2.precision(spde1, theta=mc$theta[1,])
 # There are a few entries that could be zerod.
 Q <- drop0(zapsmall(Q))
 ```
@@ -214,7 +215,18 @@ Q <- drop0(zapsmall(Q))
 ```{r eval=TRUE}
 #######################################################################
 # Markov Chain Loop
-for(mciter in 1:NMC){
+NMC= 1000
+start <- nrow(mc$theta)
+# grow the mc save object
+mc$theta <- rBind(mc$theta, matrix(NA, NMC, 2))
+mc$alpha <- abind(mc$alpha, array(NA, dim=c(NMC, Size, N)), along=1)
+mc$mu <- rBind(mc$mu, matrix(NA, NMC,1))
+mc$beta_0 <- rBind(mc$beta_0, matrix(NA, NMC, 19))
+mc$beta_1 <- rBind(mc$beta_1, matrix(NA, NMC, 19))
+mc$rho <- rBind(mc$rho, matrix(NA, NMC, 1))
+mc$sigma_y <- rBind(mc$sigma_y, matrix(NA, NMC, 19))
+
+for(mciter in (start):(start+NMC-1)){
   rho <- mc$rho[mciter]
   mu <- mc$mu[mciter]
   beta_0 <- mc$beta_0[mciter,]
@@ -236,11 +248,11 @@ for(mciter in 1:NMC){
   Xbeta_0 <- vector(mode='list', length=N)
   Zt <- vector(mode='list', length=N)
   Wbeta <- vector(mode='list', length=N)
-  Xbeta <- vector(mode='list', length=N)
+  Yhat <- vector(mode='list', length=N)
   for(i in 1:N){
     Xbeta_0[[i]] <- beta_0[species_ids[[i]]]
     Zt[[i]] <- beta_1[species_ids[[i]]] * Z[site_ids[[i]],]
-    Xbeta[[i]] <- Xbeta_0[[i]] + Zt[[i]] %*% mc$alph[mciter,,i]
+    Yhat[[i]] <- Xbeta_0[[i]] + Zt[[i]] %*% mc$alpha[mciter,,i]
     Wbeta[[i]] <- matrix(mu*(1-rho), nrow(Q),1)
   }
   
@@ -273,14 +285,14 @@ for(mciter in 1:NMC){
   
   # Precompute c (McCausland eqn 15.)
   c <- vector(mode='list', length=N)
-  c[[1]] <- t(Zt[[1]]) %*% drop0(A11[[1]] %*% (y[[1]]-Xbeta[[1]])) -
+  c[[1]] <- t(Zt[[1]]) %*% drop0(A11[[1]] %*% (y[[1]]-Xbeta_0[[1]])) -
     rho * (Q %*% Wbeta[[1]]) + 
     P1inv %*% matrix(mu_1, Size,1)
   for(t in 2:(N-1)){
-    c[[t]] <- t(Zt[[t]]) %*% drop0(A11[[t]] %*% (y[[t]]-Xbeta[[t]])) -
+    c[[t]] <- t(Zt[[t]]) %*% drop0(A11[[t]] %*% (y[[t]]-Xbeta_0[[t]])) -
       rho * (Q %*% Wbeta[[t]]) +  (Q %*% Wbeta[[t-1]])
   }
-  c[[N]] <- t(Zt[[N]]) %*% drop0(A11[[N]] %*%y[[N]]-Xbeta[[N]]) +
+  c[[N]] <- t(Zt[[N]]) %*% drop0(A11[[N]] %*% (y[[N]]-Xbeta_0[[N]])) +
     Q %*% Wbeta[[t-1]]
 
   #########################################################
@@ -344,8 +356,8 @@ for(mciter in 1:NMC){
   for(spec in 1:19){ # for each tree species (the instruments are spec==1)
     ###################################################################
     # Update beta.  This is a ridge regression using each species.
-    yy <- unlist(mapply(function(x,y) x[y==spec],y, species_ids))
-    xx <- unlist(mapply(function(x,y,z) as.vector((Z[y,] %*% x))[z==spec], split(alpha, rep(1:ncol(alpha), each=nrow(alpha))), site_ids, species_ids))
+    yy <- unlist(mapply(function(y,spec_id) y[spec_id==spec],y, species_ids))
+    xx <- unlist(mapply(function(a,y,z) as.vector((Z[y,] %*% a))[z==spec], split(alpha, rep(1:ncol(alpha), each=nrow(alpha))), site_ids, species_ids))
     sigsig <- unlist(mapply(function(x,y) sigma_sq_y[spec]/x[y==spec], nobs, species_ids))
     nn <- unlist(mapply(function(x,y) x[y==spec], nobs, species_ids))
     XX <- cbind(rep(1,length(yy)), xx)
@@ -375,7 +387,7 @@ for(mciter in 1:NMC){
   
   #################################################################
   # Update theta
-  theta_proposal <- rnorm(2, mean=mc$theta[mciter,], sd=c(.01,.01))
+  theta_proposal <- rnorm(2, mean=mc$theta[mciter,], sd=c(.008,.008))
   Q <- inla.spde2.precision(spde1, theta=mc$theta[mciter,])
   Q_proposal <- inla.spde2.precision(spde1, theta=theta_proposal)
   log_prob_old <- (N-1)*determinant(Q, logarithm=TRUE)$modulus - 
@@ -393,6 +405,7 @@ for(mciter in 1:NMC){
 
   #plot(colMeans(do.call(cBind,alpha))-)
   print(mciter)
+  print(mc$alpha[mciter,1,1])
 
 }
 
@@ -400,23 +413,72 @@ save(tree.meta, mc, spatial.coords, anom.df, years, tau0, kappa0,
      file='mcout.Rdata')
 ```
 
+```{r updateMC, eval=FALSE}
+# NMC = 1000
+# mcnew <- list(theta = matrix(NA, NMC+1, 2),
+#            alpha = array(NA, dim=c(NMC+1, Size, N)),
+#            mu = matrix(NA, NMC+1, 1),
+#            beta_0 = matrix(NA, NMC+1, 19), # the first should always be 0, it is the instrument
+#            beta_1 = matrix(NA, NMC+1, 19), # the first should always be 1, it is the instrument
+#            rho = matrix(NA, NMC+1,1),
+#            sigma_y = matrix(NA, NMC+1, 19)) #order matters
+# last_N <- nrow(mc$theta)
+# mcnew$theta[1,] <- mc$theta[last_N,]
+# mcnew$alpha[1,,] <- mc$alpha[last_N,,]
+# mcnew$beta_0[1,] <- mc$beta_0[last_N,]
+# mcnew$beta_1[1,] <- mc$beta_1[last_N,]
+# mcnew$rho[1,] <- mc$rho[last_N]
+# mcnew$sigma_y[1,] <- mc$sigma_y[last_N,]
+# mc <- mcnew
+```
+
 ```{r eval=FALSE}
-data.frame(theta1=mc$theta[-1,1], theta2=mc$theta[-1,2]) %>% 
+data.frame(theta1=mc$theta[-c(1:500),1], theta2=mc$theta[-c(1:500),2]) %>% 
   mutate(logtau=(log(tau0)+theta1), logkappa=(log(kappa0)+theta2)) %>%
   mutate(range= sqrt(8)/exp(logkappa), sigma=1/(sqrt(4*pi)*exp(logtau+logkappa))) %>%
   dplyr::select(range, sigma) %>% summary
 
+plot(apply(apply(mc$alpha[-c(1:500),,],c(1,3), mean),2,mean), type='l')
+
+
 library(scales)
-spatial.coords %>% mutate(temp=as.vector(A.inst %*% mc$alpha[100,,150])) %>% 
-  ggplot() + geom_point(aes(x=lon, y=lat, color=temp), size=5) + 
-  scale_color_gradient2(low=muted("blue"), high=muted("red"), midpoint=0) + 
+spatial.coords %>% mutate(temp=as.vector(A.inst %*% mc$alpha[1000,,51])) %>% 
+  ggplot() + geom_tile(aes(x=lon, y=lat, fill=temp)) + 
+  scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
+  coord_map(projection='mollweide')
+spatial.coords %>% mutate(temp=as.vector(A.inst %*% mc$alpha[1000,,151])) %>% 
+  ggplot() + geom_tile(aes(x=lon, y=lat, fill=temp)) + 
+  scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
   coord_map(projection='mollweide')
 
-anom.df %>% filter(year==years[150]) %>% ggplot()+geom_point(aes(x=lon, y=lat, color=sas), size=5)+ scale_color_gradient2(low=muted("blue"), high=muted("red"), midpoint=0) +   coord_map(projection='mollweide')
+spatial.coords %>% mutate(temp=as.vector(A.inst %*% m[[151]])) %>% 
+  ggplot() + geom_tile(aes(x=lon, y=lat, fill=temp)) + 
+  scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
+  coord_map(projection='mollweide')
+
+
+
+anom.df %>% filter(year==years[151]) %>% ggplot()+geom_tile(aes(x=lon, y=lat, fill=sas))+ scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) +   coord_map(projection='mollweide')
 
 dimnames(mc$beta_1)[[2]] <- levels(measure$species)
 beta_1.mean <- apply(mc$beta_1[-c(1:100),], 2, mean)
 T <- tree.meta
 T$beta1 <- beta_1.mean[tree.meta$species_code]
-ggplot(data=T)+geom_point(aes(x=-lon, y=lat, color=beta1)) + scale_color_gradient2(low=muted("blue"), high=muted("red"), midpoint=0) +   coord_map(projection='mollweide')
+
+
+#plot_limits
+library("PBSmapping")
+#library(data.table)
+#library("maps")
+
+# I stole this code from here: http://cameron.bracken.bz/finally-an-easy-way-to-fix-the-horizontal-lines-in-ggplot2-maps
+xlim=c(-180, -40)
+ylim=c(25,75)
+worldmap = map_data("world")
+names(worldmap) <- c("X","Y","PID","POS","region","subregion")
+worldmap = clipPolys(worldmap, xlim=xlim,ylim=ylim, keepExtra=TRUE)
+
+
+ggplot(data=T, aes(x=-lon, y=lat)) +geom_point(size=3.5)+geom_point(aes(color=beta1), size=3) +  scale_color_gradient2(low=muted("blue"), high=muted("red"), midpoint=0) +   coord_map(projection='mollweide', xlim=c(-160, -60)) +geom_polygon(data=worldmap,aes(X,Y,group=PID),
+        fill = NA,color="grey50")
 ```
