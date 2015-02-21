@@ -433,35 +433,63 @@ save(tree.meta, mc, spatial.coords, anom.df, years, tau0, kappa0,
 ```
 
 ```{r eval=FALSE}
-data.frame(theta1=mc$theta[-c(1:500),1], theta2=mc$theta[-c(1:500),2]) %>% 
+theta.df <- data.frame(theta1=mc$theta[-c(1:3000),1], theta2=mc$theta[-c(1:3000),2]) %>% 
   mutate(logtau=(log(tau0)+theta1), logkappa=(log(kappa0)+theta2)) %>%
   mutate(range= sqrt(8)/exp(logkappa), sigma=1/(sqrt(4*pi)*exp(logtau+logkappa))) %>%
-  dplyr::select(range, sigma) %>% summary
+  dplyr::select(range, sigma) 
 
+theta.df %>% summary
+plot(theta.df$sigma)
+plot(theta.df$range)
 plot(apply(apply(mc$alpha[-c(1:500),,],c(1,3), mean),2,mean), type='l')
 
 
 library(scales)
-spatial.coords %>% mutate(temp=as.vector(A.inst %*% mc$alpha[1000,,51])) %>% 
+spatial.coords %>% mutate(temp=as.vector(A.inst %*% mc$alpha[4000,,51])) %>% 
   ggplot() + geom_tile(aes(x=lon, y=lat, fill=temp)) + 
   scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
   coord_map(projection='mollweide')
-spatial.coords %>% mutate(temp=as.vector(A.inst %*% mc$alpha[1000,,151])) %>% 
-  ggplot() + geom_tile(aes(x=lon, y=lat, fill=temp)) + 
-  scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
-  coord_map(projection='mollweide')
-
-spatial.coords %>% mutate(temp=as.vector(A.inst %*% m[[151]])) %>% 
+spatial.coords %>% mutate(temp=as.vector(A.inst %*% mc$alpha[4000,,163])) %>% 
   ggplot() + geom_tile(aes(x=lon, y=lat, fill=temp)) + 
   scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
   coord_map(projection='mollweide')
 
+spatial.coords %>% mutate(temp=as.vector(A.inst %*% c[[165]])) %>% 
+  ggplot() + geom_tile(aes(x=lon, y=lat, fill=temp)) + 
+  scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
+  coord_map(projection='mollweide')+geom_polygon(data=worldmap,aes(X,Y,group=PID),
+        fill = NA,color="grey50")
 
+dimnames(mc$alpha) <- list(mc=seq(1,length(mc$rho)), ID=seq(1,nrow(Q)), year=years)
+(A.inst %*% mc$alpha[4100,,])%>% as.matrix %>%as.data.frame %>% 
+  mutate(SID=seq(1,nrow(A.inst))) %>% gather(key=year, value=sat,-SID) %>% 
+  left_join(spatial.coords, by=c('SID'='SID')) %>% 
+  mutate(year=as.numeric(as.character(year))) %>% filter(year>2000) %>%
+  ggplot()+geom_tile(aes(x=lon, y=lat, fill=sat))+ 
+  scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
+  coord_map(projection='mollweide') + 
+  facet_wrap(~year)+ 
+  geom_polygon(data=worldmap,aes(X,Y,group=PID),fill = NA,color="grey50")
 
-anom.df %>% filter(year==years[151]) %>% ggplot()+geom_tile(aes(x=lon, y=lat, fill=sas))+ scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) +   coord_map(projection='mollweide')
+# Create the mean posterior climate field
+sat <- apply(mc$alpha, c(1,3), function(x) as.vector(A.inst %*% x)) 
+sat <- apply(sat[,-c(1:3000),], c(1,3), mean)
+dimnames(sat) <- list(SID=seq(1,nrow(A.inst)), year=years)
+sat %>% as.data.frame %>% 
+  mutate(SID=seq(1,nrow(A.inst))) %>% gather(key=year, value=sat,-SID) %>%
+  left_join(spatial.coords, by=c('SID'='SID')) %>% 
+  mutate(year=as.numeric(as.character(year))) %>% filter(year>2000) %>%
+  ggplot()+geom_tile(aes(x=lon, y=lat, fill=sat))+ 
+  scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) + 
+  coord_map(projection='mollweide') + 
+  facet_wrap(~year)+ 
+  geom_polygon(data=worldmap,aes(X,Y,group=PID),fill = NA,color="grey50")
+
+anom.df %>% filter(year>2000) %>% ggplot()+geom_tile(aes(x=lon, y=lat, fill=sas))+ scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4)) +   coord_map(projection='mollweide') + facet_wrap(~year)+ geom_polygon(data=worldmap,aes(X,Y,group=PID),
+        fill = NA,color="grey50")
 
 dimnames(mc$beta_1)[[2]] <- levels(measure$species)
-beta_1.mean <- apply(mc$beta_1[-c(1:100),], 2, mean)
+beta_1.mean <- apply(mc$beta_1[-c(1:3000),], 2, mean)
 T <- tree.meta
 T$beta1 <- beta_1.mean[tree.meta$species_code]
 
@@ -479,6 +507,9 @@ names(worldmap) <- c("X","Y","PID","POS","region","subregion")
 worldmap = clipPolys(worldmap, xlim=xlim,ylim=ylim, keepExtra=TRUE)
 
 
-ggplot(data=T, aes(x=-lon, y=lat)) +geom_point(size=3.5)+geom_point(aes(color=beta1), size=3) +  scale_color_gradient2(low=muted("blue"), high=muted("red"), midpoint=0) +   coord_map(projection='mollweide', xlim=c(-160, -60)) +geom_polygon(data=worldmap,aes(X,Y,group=PID),
+ggplot(data=T, aes(x=-lon, y=lat)) +geom_point(size=3.5)+geom_point(aes(color=beta1), size=3) +  scale_color_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limits=c(-.05, .05)) +   coord_map(projection='mollweide', xlim=c(-160, -60)) +geom_polygon(data=worldmap,aes(X,Y,group=PID),
         fill = NA,color="grey50")
+
+as.data.frame(mc$beta_1[-c(1:3000),-1]) %>% gather(key=species, value=coef) %>% ggplot(aes(y=coef, x=species)) + geom_boxplot() + geom_abline(intercept=0, slope=0)
+
 ```
