@@ -110,10 +110,11 @@ summary(stations.df)
 
 # Read in the Index file
 widths=c(6, 23, 15, 7, 7, 6,5,5)
+col.classes <- c('character','character','character','numeric','numeric','numeric','numeric','numeric')
 Index.file <- list.files('~/Dropbox/git_root/climate-bayes/data/crutm/anomalies/station_files/CRUTEM.4.3.0.0.station_files/',
            recursive=TRUE, full.names=TRUE, pattern='Index')
 inst.meta <- read.fwf(file(Index.file, encoding='Latin1'), widths, comment.char='@',
-                      stringsAsFactors=FALSE)
+                      stringsAsFactors=FALSE, colClasses=col.classes)
 names(inst.meta) <- c('station','name','country','lat','lon','elev','start','last')
 
 save(nobs, anomalies, inst.meta, stations.df, file="/Users/nnagle/Dropbox/git_root/climate-bayes/data/CRU.Rdata")
