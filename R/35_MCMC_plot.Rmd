@@ -1,0 +1,127 @@
+---
+title: "sample Instrument and Proxy"
+author: "Nicholas Nagle"
+date: "February 13, 2015"
+output: pdf_document
+---
+```{r }
+library(dplyr)
+library(tidyr)
+library(Matrix)
+library(INLA)
+library(ggplot2)
+library(scales)
+
+# Load the sat data:
+load('~/Dropbox/git_root/climate-bayes/data/indiv.station.Rdata')
+# Load the tree ring data:
+load('~/Dropbox/git_root/climate-bayes/data/itrdb_meta.Rdata')
+# Load the spatial matrices that were created by 25_create_spatial_field.R
+load('~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
+
+# Load the MCMC output
+load('~/Dropbox/git_root/climate-bayes/R/mcout.Rdata')
+
+# Determine "burn-in"
+burn <- 1000
+```
+
+# plot the posterior tree coefficients and tree locations 
+```{r}
+library("PBSmapping")
+xlim=c(-180, -40)
+ylim=c(25,75)
+worldmap = map_data("world")
+names(worldmap) <- c("X","Y","PID","POS","region","subregion")
+worldmap = clipPolys(worldmap, xlim=xlim,ylim=ylim, keepExtra=TRUE)
+
+beta_posterior <- colMeans(mc$beta_1[-c(1:burn),])
+names(beta_posterior) <- species_levels
+tree_loc <- tree.meta %>% mutate( beta_1=beta_posterior[as.character(tree.meta$species)] )
+plt <- ggplot(data=tree_loc) + geom_point(aes(x=-lon, y=lat, color=beta_1)) + 
+	scale_color_gradient2( low=muted("blue"), high=muted("red"), midpoint=0 ) +
+coord_map(projection="mollweide") + 
+geom_polygon( data=worldmap, aes(X,Y,group=PID), fill=NA, color="grey50" )
+print(plt)
+ggsave(filename="beta.pdf", plot=plt, width=11, height=8.5)
+
+plt.data <- mc$beta_1[-c(1:burn),]
+plt.data <- as.data.frame(plt.data)
+names(plt.data) <- species_levels
+plt.data <- gather(plt.data, key=species, value=beta_1)
+plt <- plt.data %>% filter(species!="INST") %>% ggplot() + geom_boxplot( aes(x=species, y=beta_1) )
+print(plt)
+ggsave(filename="beta_boxplots.pdf", plot=plt, width=11, height=8.5)
+```
+
+
+plot the climate field
+
+This is not the best way to do it.  I am just averaging the instrument/tree locations within grid cells for now.  Better would be to create a grid of points and then predict there.
+
+```{r}
+# Create a high res grid of points:
+pred_locs <- expand.grid( lat = seq(30,80,2), lon = seq(-180,-50,2) )
+# overlay that grid on the continent
+coordinates(pred_locs) <- ~ lon + lat
+proj4string(pred_locs) <- '+proj=longlat'
+# convert worldmap into spatial polygons:
+attr(worldmap, 'projection') <- 'LL'
+world.sp <- maptools::PolySet2SpatialPolygons(worldmap)
+#world.sp %over% pred_locs
+pred_locs <- pred_locs[which(!is.na(pred_locs %over% world.sp)),]
+#plot(pred_locs)
+# Create the basis
+A.pred <- as.data.frame(pred_locs) %>% select(lon, lat) %>% as.matrix %>%
+inla.mesh.map(loc=.,projection='longlat') %>% inla.spde.make.A(mesh=mesh2, loc=.)
+
+
+# Create the MCMC predictions:
+dimnames(mc$alpha) <- list(mc=seq(1,dim(mc$alpha)[1]), ID=seq(1,dim(mc$alpha)[2]), year=years)
+dimnames(A.pred) <- list(PID=seq(1, dim(A.pred)[1]), ID=seq(1, dim(A.pred)[2]))
+preds <- apply(mc$alpha[-c(1:burn),,], c(1,3), function(x) as.vector(A.pred %*% x))
+dimnames(preds) <- list(PID=seq(1,dim(A.pred)[1]), mc=seq(1,dim(preds)[2]), year=years)
+# Flatten preds
+preds <- reshape2::melt(preds)
+
+pred_locs <- as.data.frame(pred_locs) %>% mutate(PID=seq(1,length(pred_locs))) %>%
+	mutate(wt=sin((lat+1)/180) - sin((lat-1)/180))
+
+preds <- left_join(preds, pred_locs)
+plt <- preds %>% filter(year > 1980 & year <=2000) %>% 
+group_by(lon, lat, year) %>% summarize(anomaly=mean(value)) %>% 
+ggplot()+geom_tile( aes(x=lon, y=lat, fill=anomaly )) + facet_wrap(~year) +
+scale_fill_gradient2(low=muted("blue"), high=muted("red"), midpoint=0, limit=c(-4,4))+
+coord_map(projection="mollweide") +
+geom_polygon(data=worldmap, aes(X,Y,group=PID), fill=NA, color="grey50")
+print(plt)
+ggsave(filename="anomaly_ts.pdf", plot=plt, height=8.5, width=11)
+```
+
+plot the north american average time series
+```{r}
+plt <- preds %>% 
+group_by(mc, year) %>% summarize(value=sum(value*wt)/sum(wt)) %>%
+group_by(year) %>% 
+summarize(low=quantile(value, .05), mn=mean(value), high=quantile(value, .95)) %>% 
+ggplot() + geom_ribbon(aes(x=year, ymin=low, ymax=high), fill='grey50') +
+geom_line(aes(x=year, y=mn)) + labs('y=anomaly')
+print(plt)
+ggsave(filename="North_America_ts.pdf", plot=plt, height=8.5, width=11)
+```
+
+plot regional averages
+```{r}
+
+plt <- preds %>%
+mutate(lat2 = round(lat/10)*10, lon2 = round(lon/10)*10) %>%
+group_by(mc, year, lat2, lon2) %>% summarize(value=sum(value*wt)/sum(wt)) %>%
+group_by(lat2, lon2, year) %>%
+summarize(low=quantile(value, .05), mn=mean(value), high=quantile(value, .95)) %>% 
+mutate(lat3 = factor(lat2, levels=c(80, 70, 60, 50, 40, 30))) %>%
+ggplot() + geom_ribbon(aes(x=year, ymin=low, ymax=high), fill='grey50') +
+geom_line(aes(x=year, y=mn)) + labs('y=anomaly')+facet_grid(lat3~lon2)
+print(plt)
+ggsave(filename="regional_ts.pdf", plot=plt, height=8.5, width=11)
+```
+

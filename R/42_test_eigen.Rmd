@@ -1,0 +1,306 @@
+########################################################
+# test out Rcppeigen
+
+```{r load data}
+rm(list=ls())
+#gc()
+library(dplyr)
+library(tidyr)
+library(Matrix)
+library(INLA)
+library("mvtnorm")
+library(abind)
+library(splines)
+library(ff)
+library(RcppEigen)
+
+# Load the sat data: as created in 20_plot_indiv.R
+load('~/Dropbox/git_root/climate-bayes/data/indiv.station.Rdata')
+# ann.temp is a data.frame with one row per station and columns for
+#   station, year, lat, lon, n is number of observations that year (a full year is 12)
+# sat is surface air temperature anomaly
+# Load the tree ring data:
+load('~/Dropbox/git_root/climate-bayes/data/itrdb_meta.Rdata')
+# two objects
+#   - tree.meta: a data.frame with one row per site.  lat, lon, etc
+#   - crn: a list of crn objects from dplr.  one object per site.
+# Load the spatial matrices that were created by 25_create_spatial_field.R
+load('~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
+# four objects:
+#   - mesh2: a spatial mesh object from INLA.  Basically, defines a TIN 
+#   - A.inst: the interpolation matrix for the instrument locations
+#   - A.tree: the interpolation matrix for the tree sites
+#   - spatial.coords: a subset of ann.temp with one record per station
+#   - 
+# Convert species_code to a facter
+tree.meta <- tree.meta %>% mutate(species = as.factor(species_code))
+
+# Count the number of distinct species:
+num.species <- nlevels(tree.meta$species)
+
+# Find number of years
+years <- seq(1850, 2010)
+
+N <- length(years)
+
+```
+
+Create a flat dataframe for all measurement vars, with the columns:
+  year, site, species, measure, count, lat, lon
+```{r, eval=TRUE}
+# Process tree ring data here...
+# Create a flat data frame out of crn
+# For each chronology, create a dataframe with cols:
+#  ID, species, year, rwi, n
+crn.df <- vector(mode='list', length=length(crn))
+for(i in 1:length(crn.df)){
+  crn.df[[i]] <- as_data_frame(crn[[i]])
+  names(crn.df[[i]]) <- c('rwi', 'n')
+  crn.df[[i]] <- data_frame(ID=as.character(i), species=tree.meta$species_code[i], 
+                            year=as.numeric(row.names(crn[[i]])),
+                            prox = crn.df[[i]]$rwi, n=crn.df[[i]]$n)
+}
+# Add lat and lon to crn.df (yes, it's redundant)
+tree.meta <- tree.meta %>% mutate(ID=as.character(seq(1, nrow(tree.meta))))
+crn.df <- left_join(bind_rows(crn.df), tree.meta %>% select(ID, lat, lon), by=c('ID'='ID')) 
+# Merge the instrument and proxy records:
+ann.temp <- ann.temp %>% ungroup %>% 
+  transmute(ID=station, species='INST', year=year2, prox=sat, n=1, lat=lat, lon=lon)
+measure <- bind_rows(ann.temp, bind_rows(crn.df)) %>% ungroup
+measure$row <- seq(1,nrow(measure))
+# Create the species design matrix, rearranging so INST is first
+species_levels <- measure %>% filter(species != 'INST') %>% distinct(species) %>%
+  arrange(species) %>% .[['species']]
+species_levels <- c('INST', species_levels)
+
+measure <- measure %>% mutate(species = factor(species, levels=species_levels))
+design <-  sparse.model.matrix(~species-1, data=measure)
+row.names(design) <- measure$ID
+```
+
+The coefficients $\beta_0$ and $\beta_1$ are varying across the lat/time space:, i.e. $\beta(lat, year) = f(lat)+f(year)+f(lat, year)$.
+We do this by creating a grid of $5^2$ knots over the range $((30,70), (1850, 2010))$
+  
+  ```{r create  spatial basis and site data.frame, eval=TRUE}
+basis <- rBind(A.inst, A.tree)
+# Create a data.frame with site characteristics
+site <- data_frame(ID=row.names(basis)) %>% 
+  left_join(., 
+            measure %>% distinct(ID) %>% select(ID, species))
+```
+
+```{r create beta basis matrix, eval=TRUE}
+k.lat=5
+k.yr=5
+B.lat <- vector('list', length=num.species)
+names(B.lat) <- species_levels[-c(1)]
+B.year <- vector('list', length=num.species)
+names(B.year) <- species_levels[-c(1)]
+B.lat.year <- B.year
+for(s in species_levels[-1]){ 
+  these.trees <- measure %>% filter(species==s)
+  r <- range(these.trees$lat)
+  B.lat[[s]] <- bs(x=these.trees$lat, 
+                   knots=seq(r[1],r[2], length=k.lat)[-c(1,k.lat)],
+                   df=3,
+                   Boundary.knots=r, intercept=TRUE)
+  dimnames(B.lat[[s]])[[1]] <- these.trees$row
+  dimnames(B.lat[[s]])[[2]] <- paste0('l', 1:(k.lat+3-1))
+  # cooerce to sparse
+  attr(B.lat[[s]], 'class') <- 'matrix'
+  B.lat[[s]] <- drop0(B.lat[[s]])
+  r <- range(years)
+  B.year[[s]] <- bs(x=these.trees$year, 
+                    knots=seq(r[1],r[2], length=k.yr)[-c(1,k.yr)],
+                    df=3,
+                    Boundary.knots=r, intercept=TRUE)
+  dimnames(B.year[[s]])[[1]] <- these.trees$row
+  dimnames(B.year[[s]])[[2]] <- paste0('y', 1:(k.yr+3-1))
+  attr(B.year[[s]], 'class') <- 'matrix'
+  B.year[[s]] <- drop0(B.year[[s]])
+  B.lat.year[[s]] <- kronecker(B.lat[[s]],matrix(1,1,k.yr+3-1)) *
+    kronecker(matrix(1,1,k.lat+3-1), B.year[[s]])
+  # That's like a rep(each)*rep(times) by columns
+  dimnames(B.lat.year[[s]])[[1]] <- these.trees$row
+  dimnames(B.lat.year[[s]])[[2]] <- as.vector(outer(paste0('l',1:(k.lat+3-1)), paste0('y',1:(k.yr+3-1)),'paste0'))
+}
+# Create matrices to calculate row.sums and col.sums of the B.lat.year coef
+B.year.margin <- kronecker(diag(k.lat+3-1), matrix(1,1,k.yr+3-1)) # one record per year
+B.lat.margin <- kronecker(matrix(1,1,k.lat+3-1), diag(k.yr+3-1)) # one record per lat
+B.constraint <- bdiag(matrix(1, 1, k.lat+3-1), 
+                      matrix(1,1,k.yr+3-1),
+                      rBind(B.year.margin, B.lat.margin, 1))
+# I can delete the last two columns and make it full row rank:
+B.constraint <- B.constraint[ -c(16,17), ]
+```
+
+```{r create the spde, eval=TRUE}
+# Parameters for the spde:
+sigma0 <- 1 # standard deviation
+range0 <- .8 # range
+# convert into tau and kappa
+kappa0 = sqrt(8)/range0
+tau0 = 1/(sqrt(4*pi)*kappa0*sigma0)
+
+spde1 <- inla.spde2.matern(mesh=mesh2,
+                           B.tau=cbind(log(tau0),1,0),
+                           B.kappa=cbind(log(kappa0), 0, 1),
+                           theta.prior.mean=c(0,0),
+                           theta.prior.prec=c(1,1))
+```
+```{r, eval=TRUE}
+# Set precision:
+Q <- inla.spde2.precision(spde1, theta=c(0,0))
+```
+
+```{r}
+for(t in 1:160){Cholesky(Q)}
+```
+
+Note: LDLt is a hair faster than LLt
+Both are 10 times faster than Cholesky
+```{r}
+# Do a single cholesky
+cxxfun <- sprintf('
+typedef Eigen::MappedSparseMatrix<double> MSpMat;
+typedef Eigen::SparseMatrix<double>        SpMat;
+typedef Eigen::SimplicialLDLT<SpMat>       SpChol;
+
+const SpMat       At(as<MSpMat>(A).adjoint());
+const SpChol      Ch(At);
+if (Ch.info() != Eigen::Success) return R_NilValue;
+return(List::create(Named("perm")        = Ch.permutationP().indices(),
+                    Named("L")           = Ch.matrixL()));
+')
+
+library(inline)
+sparse2 <- cxxfunction(signature(A = "dgCMatrix"), cxxfun, "RcppEigen")
+```
+
+
+```{r}
+# Do a single cholesky
+cxxfun3 <- sprintf('
+using Eigen::MatrixXd;
+using Eigen::SparseMatrix;
+using Eigen::MappedSparseMatrix;
+
+typedef Eigen::Map<Eigen::MatrixXd>      MapMatd;
+typedef Eigen::MappedSparseMatrix<double> MSpMat;
+typedef Eigen::SparseMatrix<double>        SpMat;
+typedef Eigen::SimplicialLLT<SpMat>       SpChol;
+
+const SpMat       At(as<MSpMat>(A));
+const MapMatd     b(as<MapMatd>(bb));
+const SpChol      Ch(At);
+if (Ch.info() != Eigen::Success) return R_NilValue;
+return(List::create(Named("perm")        = Ch.permutationP().indices(),
+                    Named("sol")         = Ch.solve(b),
+                    Named("L")           = Ch.matrixL()));
+')
+
+sparse3 <- cxxfunction(signature(A = "dgCMatrix", bb = "matrix"), cxxfun3, "RcppEigen")
+```
+
+```{r}
+bb <- matrix(rnorm(202*3), 202, 3);
+p0 <- proc.time(); for(t in 1:100){ sparse3(Q, bb) }; proc.time()-p0
+p0 <- proc.time(); for(t in 1:100){ solve(Cholesky(Q), bb, system='A') }; proc.time()-p0
+p0 <- proc.time(); for(t in 1:100){ solve(Q, bb, sparse=TRUE) }; proc.time()-p0
+p0 <- proc.time(); for(t in 1:100){ solve(Q, bb, sparse=FALSE) }; proc.time()-p0
+p0 <- proc.time(); for(t in 1:100){ Matrix::chol(Q) }; proc.time()-p0
+```
+
+```{r}
+p0 <- proc.time(); for(t in 1:160){ sparse2(Q) }; proc.time()-p0
+p0 <- proc.time(); for(t in 1:160){ Cholesky(Q) }; proc.time()-p0
+```
+
+
+
+
+```{r}
+p0 <- proc.time()
+  Chol_omega <- vector(mode='list', length=N)
+  Chol_omega[[1]] <- Cholesky(Omega_tt[[1]], LDL=FALSE, perm=FALSE)
+  # Note, that when following McCausland, that t(Omega_t-1,t) = Omega_tt1
+  for(t in 2:N){
+      temp <- Omega_tt[[t]] - 
+          (Omega_tt1) %*% solve(Chol_omega[[t-1]], t(Omega_tt1), system='A')
+      #temp <- (temp +t(temp))/2
+      # this is the same: but slower:
+      # Omega_tt[[t]] - crossprod(solve(Chol_omega[[t-1]], t(Omega_tt1), system='L'))
+      Chol_omega[[t]] <- Cholesky(((temp)), LDL=FALSE, perm=FALSE)
+      #Chol_omega[[t]] <- chol(as.matrix(temp), permute=TRUE)
+  }
+proc.time() - p0
+  
+p0 <- proc.time()
+  Chol_omega <- vector(mode='list', length=N)
+for(t in 1:N){
+  Chol_omega[[1]] <- Cholesky(Omega_tt[[1]], LDL=FALSE, perm=FALSE)}
+proc.time() - p0
+  
+p0 <- proc.time()
+  Chol_omega <- vector(mode='list', length=N)
+for(t in 1:N){
+  Chol_omega[[1]] <- Cholesky(Omega_tt[[1]])}
+proc.time() - p0
+
+    
+  # Note, that when following McCausland, that t(Omega_t-1,t) = Omega_tt1
+  for(t in 2:N){
+      temp <- Omega_tt[[t]] - 
+          (Omega_tt1) %*% solve(Chol_omega[[t-1]], t(Omega_tt1), system='A')
+      #temp <- (temp +t(temp))/2
+      # this is the same: but slower:
+      # Omega_tt[[t]] - crossprod(solve(Chol_omega[[t-1]], t(Omega_tt1), system='L'))
+      Chol_omega[[t]] <- Cholesky(((temp)), LDL=FALSE, perm=FALSE)
+      #Chol_omega[[t]] <- chol(as.matrix(temp), permute=TRUE)
+  }
+proc.time() - p0
+  
+  
+```
+
+
+```{r}
+  rcpp.body <- '
+using Eigen::MatrixXd;
+using Eigen::SparseMatrix;
+using Eigen::MappedSparseMatrix;
+
+template <typename WHAT>
+class ListOf : public List {
+public:
+    template <typename T>
+    ListOf( const T& x) : List(x){}
+
+    WHAT operator[](int i){ return as<WHAT>( ( (List*)this)->operator[]( i) ) ; }
+
+} ;
+  
+typedef Eigen::Map<Eigen::MatrixXd>      MapMatd;
+typedef Eigen::MappedSparseMatrix<double> MSpMat;
+typedef Eigen::SparseMatrix<double>        SpMat;
+typedef Eigen::SimplicialLLT<SpMat>       SpChol;
+
+
+  
+Rcpp::List       Ott(OttIn);
+int n = Ott.size();
+const SpMat      Ot1(as<MSpMat>(Ot1In));
+
+Rcpp::List x(n);
+
+for(int i=0; i<n; i++){
+  SEXP ll = Ott[i];
+}
+return(wrap(x));
+'
+  sparse4 <- cxxfunction(signature(OttIn = "list",  Ot1In= "dgCMatrix"), rcpp.body, "RcppEigen")
+```
+
+```{r}
+  sparse4(Omega_tt, Omega_tt1)
+```

@@ -1,0 +1,634 @@
+---
+title: "sample Instrument and Proxy"
+author: "Nicholas Nagle"
+date: "February 13, 2015"
+output: pdf_document
+---
+ Data Model
+We define the list of measured data to be $\{Y_{tk}i\}$, where $t$ indexes the time period and $k$ indexesthe measurement type (ex. species of tree or instrement).  The unknown temperature field at each location is indicated by the variable $Z_t$.
+The Instrument and Proxy data follow the linear model
+$$\mathbf{Y}_{t,k} = \mathbf{X}_t\boldsymbol{\beta_{0,k}} + \mathbf{Z}_{t}\boldsymbol{\beta}_{1} + \boldsymbol{\nu}_{t,k}$$
+where the error follows a normal law $\boldsymbol{\nu}_t \sim N(\mathbf{0}, \boldsymbol{\Sigma}_{\nu, t,k})$.  For the time, we simplify the variance matrix to be $\sigma^2_{k}\boldsymbol{I}$.  Additionally, we will assume that there is no measurement error in the instrument record (i.e. $(\beta_{0,k},\ \beta_{1,k},\ \sigma^2_{k})=(0, 1, 0)$ for $k=$'instrument').  Measurement error in the instrument record is subsumed under the variance of the temperature field $Z_t$.
+
+For the time, I assume that the errors $\nu$ have no temporal or spatial autocorrelation. Temporal autocorrelation may be important for the tree species.
+
+
+
+```{r load data}
+rm(list=ls())
+library(dplyr)
+library(tidyr)
+library(Matrix)
+library(INLA)
+library("mvtnorm")
+library(abind)
+
+# Load the sat data:
+load('~/Dropbox/git_root/climate-bayes/data/indiv.station.Rdata')
+# Load the tree ring data:
+load('~/Dropbox/git_root/climate-bayes/data/itrdb_meta.Rdata')
+# Load the spatial matrices
+load('~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
+
+# Convert species_code to a facter
+tree.meta <- tree.meta %>% mutate(species = as.factor(species_code))
+
+# Count the number of distinct species:
+num.species <- nlevels(tree.meta$species)
+
+
+
+# alpha_t is a 580 x 1 vector
+# y_t is a 914 tree plus 106 sas locs = 1020 x 1 vector
+
+# beta has
+# 18 intercepts for each species
+# 18 slopes for each species
+# 1 mean for alpha
+
+# Z_grid = 106 x 580 matrix
+# Z_tree is a 914 x 580 matrix: diag(beta) %*% A_tree
+
+
+# Find number of years
+years <- seq(1850, 2010)
+  
+N <- length(years)
+
+```
+
+Create a flat dataframe for all measurement vars, with the columns:
+year, site, species, measure, count
+```{r, eval=FALSE}
+# Process tree ring data here...
+# Create a flat data frame out of crn
+# For each chronology, create a dataframe with cols:
+#  ID, species, year, rwi, n
+crn.df <- vector(mode='list', length=length(crn))
+for(i in 1:length(crn.df)){
+  crn.df[[i]] <- as_data_frame(crn[[i]])
+  names(crn.df[[i]]) <- c('rwi', 'n')
+  crn.df[[i]] <- data_frame(ID=as.character(i), species=tree.meta$species_code[i], 
+                            year=as.numeric(row.names(crn[[i]])),
+                            prox = crn.df[[i]]$rwi, n=crn.df[[i]]$n)
+}
+
+# Merge the instrument and proxy records:
+# We aren't using the tree data yet
+ann.temp <- ann.temp %>% ungroup %>% transmute(ID=station, species='INST', year=year2, prox=sat, n=1)
+measure <- bind_rows(ann.temp, bind_rows(crn.df)) %>% ungroup
+
+# Create the design matrix, rearranging so INST is first
+species_levels <- measure %>% filter(species != 'INST') %>% distinct(species) %>%
+  arrange(species) %>% .[['species']]
+species_levels <- c('INST', species_levels)
+
+measure <- measure %>% mutate(species = factor(species, levels=species_levels))
+design <-  sparse.model.matrix(~species-1, data=measure)
+row.names(design) <- measure$ID
+```
+
+ Process Model
+Prepare the basis matrices.
+The basis matrix can be indexed by the `measurestation` variable
+
+```{r, eval=FALSE}
+basis <- rBind(A.inst, A.tree)
+# Create a data.frame with site characteristics
+site <- data_frame(ID=row.names(basis)) %>% 
+  left_join(., 
+            measure %>% distinct(ID) %>% select(ID, species))
+```
+
+```{r, eval=FALSE}
+# Parameters for the spde:
+sigma0 <- 1 # standard deviation
+range0 <- .8 # range
+# convert into tau and kappa
+kappa0 = sqrt(8)/range0
+tau0 = 1/(sqrt(4*pi)*kappa0*sigma0)
+
+spde1 <- inla.spde2.matern(mesh=mesh2,
+                           B.tau=cbind(log(tau0),1,0),
+                           B.kappa=cbind(log(kappa0), 0, 1),
+                           theta.prior.mean=c(0,0),
+                           theta.prior.prec=c(1,1))
+```
+
+
+
+ Prior Distributions
+The parameters of the model are $(\beta_{0,k}, \beta_{1,k},\sigma_{k}, \sigma_{\delta}, \boldsymbol{\alpha}_0)$.  The model is completed by specifying conjugate priors on these of 
+$$\beta_{0,k}\sim N(0, \sigma^2_0)$$
+$$\beta_{1,k}\sim N(0, \sigma^2_1)$$
+$$\sigma^2_{l}\sim IG(\nu_l, \nu_l)$$
+$$\boldsymbol{\alpha}_0 \sim N(0, \sigma_\alpha^2\mathbf{I})$$
+$\theta$ does not have a conjugate prior, and we simply specify it here as $\pi$.  We specify a non-conjugate $U(0,1)$ prior on $\rho$.
+
+Evaluate a good prior for theta.  I want to make sure that theta translates into good values for sigma and range:
+
+```{r eval=FALSE}
+data.frame(theta1=rnorm(1000,0, sd=1/1), theta2=rnorm(1000, 0, 1/1)) %>% 
+  mutate(logtau=(log(tau0)+theta1), logkappa=(log(kappa0)+theta2)) %>%
+  mutate(range= sqrt(8)/exp(logkappa), sigma=1/(sqrt(4*pi)*exp(logtau+logkappa))) %>%
+  dplyr::select(range, sigma) %>% summary
+```
+That seems good.
+
+```{r, eval=FALSE}
+# Set precision:
+Q <- inla.spde2.precision(spde1, theta=c(0,0))
+```
+
+```{r alpha 1 prior, eval=FALSE}
+mu_1 <- 0
+sigma_sq_1 <- 4
+```
+
+```{r mu prior, eval=FALSE}
+mu_0 = 0
+sigma_sq_mu = 1e-12
+```
+
+```{r beta prior, eval=FALSE}
+beta_0 = rep(1,18)
+sigma_sq_beta_0 = 3
+
+beta_1 = rep(0,18)
+sigma_sq_beta_1 = 3
+
+```
+
+```{r prior on siga sq Instrument, eval=FALSE}
+nu_I <- .5
+lambda_I <- .5
+```
+
+```{r prior on sigma sq proxy, eval=FALSE}
+nu_P <- .5
+lambda_P <- .5
+```
+
+```{r, eval=FALSE}
+# y has a 106 x 1 vector
+# alpha has a 580 x 1 vector
+# beta is the mean mu of alpha.
+# there is no X.
+# W = (1-rho) * mu
+# T = rho*I
+
+Size <- mesh2$n
+
+
+# Markov Chain Setup
+NMC <- 1
+# Save the storage objects
+mc <- list(theta = matrix(NA, NMC, 2),
+           alpha = array(NA, dim=c(NMC, Size, N)),
+           mu = matrix(NA, NMC, 1),
+           beta_0 = matrix(NA, NMC, 19), # the first should always be 0, it is the instrument
+           beta_1 = matrix(NA, NMC, 19), # the first should always be 1, it is the instrument
+           rho = matrix(NA, NMC,1),
+           sigma_delta = matrix(NA, NMC,1),
+           sigma_y = matrix(NA, NMC, 19)) #order matters
+mc$theta[1,] <- c(0,0)
+mc$alpha[1,,] <- rep(0, Size*N)
+mc$mu[1] <- 0
+mc$beta_0[1,] <- c(0, rep(1,18))
+mc$beta_1[1,] <- c(1, rep(0,18))
+mc$rho[1] <- .8
+
+# Use variance of proxies for the initial sigma_y values.
+mc$sigma_delta[1] <- measure %>% ungroup %>% filter(species=='INST') %>% .[['prox']] %>% sd
+mc$sigma_y[1,] <- 
+  c(0, # assume no extra error for measurements
+    rep(measure %>% ungroup %>% filter(species!='INST') %>% .[['prox']] %>% sd, 18))
+mc$sigma_y[1,] <- mc$sigma_y[1,] * (100^2)
+```
+
+```{r eval=FALSE}
+woodbury_solve <-  function(A, b){
+  # Solve the equation Ax=b, 
+  #   where A = UCV+D
+  # The solve is A^ = D^ + D^ U (C^ + V D^ U)^ V D^
+  #  where X^ = X^{-1}
+  #
+  # Inputs:
+  # A$D (possible a Cholesky factorization thereof)
+  # A$U
+  # A$V (defaults to t(A$U) )
+  # A$Cinv
+  #
+  A$V <- t(A$U)
+  Db <- solve(A$D, b)
+  VDU <- A$V %*% solve(A$D, A$U)
+  CiVDU <- A$Cinv + VDU 
+  return(Db - solve(A$D, A$U) %*% solve(CiVDU, A$V %*% Db))
+}
+
+
+```
+
+ Posterior Distribution
+s;jfkad;df
+
+ ```{r eval=FALSE}
+ ```
+
+ ```{r eval=FALSE}
+#######################################################################
+# Markov Chain Loop
+NMC= 1
+start <- nrow(mc$theta)
+# grow the mc save object
+mc$theta <- rBind(mc$theta, matrix(NA, NMC, 2))
+mc$alpha <- abind(mc$alpha, array(NA, dim=c(NMC, Size, N)), along=1)
+mc$mu <- rBind(mc$mu, matrix(NA, NMC,1))
+mc$beta_0 <- rBind(mc$beta_0, matrix(NA, NMC, 19))
+mc$beta_1 <- rBind(mc$beta_1, matrix(NA, NMC, 19))
+mc$rho <- rBind(mc$rho, matrix(NA, NMC, 1))
+mc$delta <- rBind(mc$delta, matrix(NA, NMC, 1))
+mc$sigma_y <- rBind(mc$sigma_y, matrix(NA, NMC, 19))
+
+K0 <- .sparseDiagonal(n=Size, x=sigma_sq_1)
+
+measure <- measure %>% filter(year %in% years)
+basis <- basis[row.names(basis) %in% unique(measure$ID), ]
+design <- sparse.model.matrix(~species-1, data=measure)
+site <- site[site$ID %in% unique(measure$ID), ]
+site$species <- factor(site$species, levels=levels(measure$species))
+
+
+
+sites.by.years <- split(measure$ID, measure$year)
+rows.by.years <- split(1:nrow(measure), measure$year)
+measure.by.years <- split(measure, measure$year)
+design.by.years <- lapply(rows.by.years, function(x) design[x,  ])
+basis.by.years <- lapply(sites.by.years, function(x) basis[x, ])
+Observation <- split(left_join(measure, site %>% mutate(row=1:2715)) %>% .[['row']], measure$year)
+Observation <- lapply(Observation, function(x) sparseMatrix(i=1:length(x), j=x))
+
+rows.by.species <- split(1:nrow(measure), measure$species)
+```
+
+```{r eval=FALSE}
+for(mciter in (start):(start+NMC-1)){
+  mu      <- mc$mu[mciter]
+  rho     <- mc$rho[mciter]
+  beta_0  <- mc$beta_0[mciter,]
+  beta_1  <- mc$beta_1[mciter,]
+  sigma_sq_y     <- mc$sigma_y[mciter,]^2
+  sigma_sq_delta <- mc$sigma_delta^2
+  
+  # Z_1 is beta1.basis
+  beta1.basis <- mapply(function(x,y) return(x * beta_1[y$species]), basis.by.years, measure.by.years)
+  
+  ####################################################################
+  # Using the technique in Mcausland
+  # Calculate prior variance on alpha1
+  P1 <- .sparseDiagonal(n=Size, x=sigma_sq_1)
+  P1inv <- .sparseDiagonal(n=Size, x=1/sigma_sq_1)
+  # Calculate T * A_22 *T (refer to McCausland) # The variance due to
+  #   carrying forward the previous state
+  TA22T <- rho^2 * Q
+  
+  # Calculate the idiosyncratic precision of each obs
+  #  This is the beta^2 * (field nugget) plus measurement error
+  A11 <- lapply(measure.by.years, function(x) 
+    sigma_sq_y[unclass(x$species)]/x$n + sigma_sq_delta * beta_1[unclass(x$species)]^2)
+  A11 <- lapply(A11, function(x) 1/x)
+  A11 <- lapply(A11, function(x) {x[!is.finite(x)] <- 0; return(x)})
+  A11 <- lapply(A11, function(x) .sparseDiagonal(n=length(x), x=x))
+
+  Omega_tt <- vector(mode='list', length=N)
+  Omega_tt[[1]] <- t(beta1.basis[[1]]) %*% A11[[1]] %*% beta1.basis[[1]] + TA22T + P1inv
+  for(t in 2:N){
+    Omega_tt[[t]] <- t(beta1.basis[[t]]) %*% A11[[t]] %*% beta1.basis[[t]] + TA22T + Q
+  }
+  Omega_tt[[N]] <- t(beta1.basis[[N]]) %*% A11[[N]] %*%  beta1.basis[[N]] + Q
+  
+  # Precompute Omega_t,t+t
+  Omega_tt1 <- -rho * Q  #(it's the same for every time period)
+
+  # Precompute c (McCausland eqn 15.)
+  # Note: Z_11 is beta1.basis
+  c <- vector(mode='list', length=N)
+  resid <- as.vector(measure$prox - design %*% beta_0 )
+  for(t in 1:N){ 
+    c[[t]] <- t(beta1.basis[[t]]) %*% A11[[t]] %*% resid[rows.by.years[[t]]]
+    }
+
+  Chol_omega <- vector(mode='list', length=N)
+  Chol_omega[[1]] <- Cholesky(Omega_tt[[1]], LDL=FALSE, perm=FALSE)
+  # Note, that when following McCausland, that t(Omega_t-1,t) = Omega_tt1
+  for(t in 2:N){
+    temp <- Omega_tt[[t]] - 
+      (Omega_tt1) %*% solve(Chol_omega[[t-1]], t(Omega_tt1), system='A')
+    temp <- (temp +t(temp))/2
+    # this is the same: but slower:
+    # Omega_tt[[t]] - crossprod(solve(Chol_omega[[t-1]], t(Omega_tt1), system='L'))
+    Chol_omega[[t]] <- Cholesky(((temp)), LDL=FALSE, perm=FALSE)
+    #Chol_omega[[t]] <- chol(as.matrix(temp), permute=TRUE)
+  }
+  
+  
+  # LO = Lambda_t \ Omega_t1
+  LO <- vector(mode='list', length=N)
+  for(t in 1:N){LO[[t]] <- drop0((solve(Chol_omega[[t]], Omega_tt1, system='L')))}
+
+  m <- vector(mode='list', length=N)
+  m[[1]] <- solve(Chol_omega[[1]], c[[1]], system='A')
+  for(t in 2:N){
+    m[[t]] <- solve(Chol_omega[[t]], c[[t]] - Omega_tt1 %*% m[[t-1]], system='A')
+  }
+
+  #############################################
+  # And here it is... simulate alpha
+  alpha <- vector(mode='list', length=N)
+  epsilon <- rnorm(n=nrow(Q))
+  alpha[[N]] <- m[[N]] + solve(Chol_omega[[N]], epsilon, system='Lt')
+  for(t in seq(N-1, 1, -1)){
+    epsilon <- rnorm(n=nrow(Q))
+    alpha[[t]] <- m[[t]] + solve(Chol_omega[[t]], epsilon - LO[[t]] %*% alpha[[t+1]], system='Lt')
+  }
+  alpha <- as.matrix(do.call(cBind, alpha))
+  
+  mc$alpha[mciter+1, ,] <- alpha
+  
+  #############################################
+  # And here it is... simulate delta
+  # At all of the instrument sites... delta is just the residual
+  # at the proxy sites, var(delta) = 1/(1/var(delta)+1/var(y))
+  delta <- rep(0, nrow(measure))
+  for(t in 1:N){
+    b1 <- beta_1[unclass(measure.by.years[[t]]$species)]
+    # separate into (b1==0 or INST) and !(b1==0 or INST)
+    
+    
+    b10 <- (b1==0)
+    delta_t <- rep(0, length=nrow(measure.by.years[[t]]))
+    delta_t[which(b10)] <- rnorm(n=sum(b10), mean=0, sd = sqrt(sigma_sq_delta))
+
+    
+    sig_y <- sigma_sq_y[unclass(measure.by.years[[t]]$species)]/measure.by.years[[t]]$n
+    
+    post_var <-  measure.by.years[[t]]$n/sigma_sq_y[unclass(measure.by.years[[t]]$species)] + 
+      1/(sigma_sq_delta * beta_1[unclass(measure.by.years[[t]]$species)]^2)
+    post_var <- 1/post_var
+    
+    resid <- measure.by.years[[t]]$prox - design.by.years[[t]] %*% beta_0 - beta.basis[[t]] %*% alpha[,t]
+    k_delta <- resid / sig_y
+    m_delta <- as.numeric( k_delta*post_var )
+    m_delta[!is.finite(m_delta)] <- 0
+    
+    temp <- rnorm(n=length(m_delta), mean=m_delta, sd = sqrt(post_var))
+    temp <- temp/b1
+    
+    delta_t[which(!b10)] <- temp[which(!b10)]
+    bI <- measure.by.years[[t]]$species=='INST'
+    delta_t[which(bI)] <- resid[which(bI)]
+    delta[rows.by.years[[t]]] <- delta_t
+  }
+
+  #####################################################
+  # Update sigma_sq_delta
+#  sigma_sq_delta <- MCMCpack::rinvgamma(1, .5+length(delta)/2, .5*sum(delta^2)/2)
+  sigma_sq_delta <- MCMCpack::rinvgamma(1, 
+                                        .5+sum(beta_1[measure$species])/2,
+                                        .5*sum((beta_1[measure$species]*delta)^2)/2)
+
+  mc$sigma_delta[mciter+1] <- sqrt(sigma_sq_delta)
+
+  ###################################################################
+  # Update rho
+  mu=0
+  c_rho <- sum(diag( t(alpha[,-N]-mu) %*% Q %*% (alpha[,-1]-mu)))
+  V_rho <- 1 / sum(apply(alpha[,-N]-mu, 2, function(x) as.numeric(t(x) %*% Q %*% x)))
+  rho <- msm::rtnorm(1, mean=V_rho*c_rho, sd=sqrt(V_rho), lower=0, upper=1)
+  mc$rho[mciter+1] <- rho
+  
+  ##############################################################################
+  # Loop through each species, updating beta0, beta1, and sigma_sq
+  dimnames(alpha) <- list(1:nrow(alpha), years)
+  Balpha <- basis %*% alpha
+  dimnames(Balpha) <- list(site$ID, years)
+  Balpha <- as.data.frame(as.matrix(Balpha))
+  Balpha$ID <- row.names(Balpha)
+  Balpha <- gather(Balpha, key=year, value=bahat, -ID) %>% 
+    mutate(year=as.numeric(as.character(year))) %>% 
+    left_join(measure, .)
+  
+  for(spec in 1:length(species_levels)){
+    ###################################################################
+    # Update beta.  This is a ridge regression using each species.
+    yy <- measure %>% filter(species==species_levels[spec]) %>% .[['prox']]
+    xx <- Balpha$bahat[rows.by.species[[spec]]] + delta[rows.by.species[[spec]]]
+    nn <- (Balpha$n[rows.by.species[[spec]]])
+    sigsig <- sigma_sq_y[spec] / nn
+    XX <- cbind(rep(1,length(yy)), xx)
+    if (spec>1){
+      udv <- svd(XX/sqrt(sigsig))
+      # normal reg udv$v %*% diag(1/udv$d) %*% t(udv$u) %*% (yy/sqrt(sigsig))
+      lambda <- 1/c(sigma_sq_beta_0, sigma_sq_beta_1)
+      beta_mn <- udv$v %*% (diag(1/(udv$d^2 + lambda))) %*% diag(udv$d) %*% t(udv$u) %*% (yy/sqrt(sigsig))
+      beta_cov <- udv$v %*% (diag(1/(udv$d^2 + lambda))) %*% t(udv$v)
+      beta_sim <- rmvnorm(1, beta_mn, beta_cov)
+      
+      ###################################################################
+      # Update sigma_sq_y.  
+      yhat <- XX %*% as.vector(beta_sim)
+      SSE <- sum((yy-yhat)^2*nn)
+      nu <- nu_I + SSE/2
+      lam <- lambda_I + sum(nn)/2
+      sigma_sq_y[spec] <-  MCMCpack::rinvgamma(1, lam, nu)
+
+    }else {beta_sim <- c(0,1) } 
+    
+    beta_0[spec] <- beta_sim[1]
+    beta_1[spec] <- beta_sim[2]
+    
+  }
+  mc$beta_0[mciter+1,] <- beta_0
+  mc$beta_1[mciter+1,] <- beta_1
+  mc$sigma_y[mciter+1,] <- sigma_sq_y
+  
+
+  #################################################################
+  # Update theta
+  theta_proposal <- rnorm(2, mean=mc$theta[mciter,], sd=c(.008,.008))
+  Q <- inla.spde2.precision(spde1, theta=mc$theta[mciter,])
+  Q_proposal <- inla.spde2.precision(spde1, theta=theta_proposal)
+  log_prob_old <- (N-1)*determinant(Q, logarithm=TRUE)$modulus - 
+    sum(apply(alpha[,-1]-rho*alpha[,-N]-(1-rho)*mu, 2, 
+              function(x) as.numeric(t(x) %*% Q %*% x)))
+  log_prob_proposal <- (N-1)*determinant(Q_proposal, logarithm=TRUE)$modulus - 
+    sum(apply(alpha[,-1]-rho*alpha[,-N]-(1-rho)*mu, 2, 
+              function(x) as.numeric(t(x) %*% Q_proposal %*% x)))
+  accept <- exp(log_prob_proposal-log_prob_old)
+  c(log_prob_old, log_prob_proposal, accept)
+  if( runif(1) < accept){
+    mc$theta[mciter+1,] <- theta_proposal
+    Q <- Q_proposal
+  } else mc$theta[mciter+1,] <- mc$theta[mciter,]
+
+  #plot(colMeans(do.call(cBind,alpha))-)
+  print(mciter)
+  print(mc$alpha[mciter,1,1])
+
+
+  
+}
+```
+
+
+```{r eval=FALSE}
+# for(mciter in (start):(start+NMC-1)){
+#   rho     <- mc$rho[mciter]
+#   mu      <- mc$mu[mciter]
+#   beta_0  <- mc$beta_0[mciter,]
+#   beta_1  <- mc$beta_1[mciter,]
+#   sigma_sq_y     <- mc$sigma_y[mciter,]^2
+#   sigma_sq_delta <- mc$sigma_delta^2
+#   
+#   
+#   ##############################################################
+#   # Precompute the elements of the kalman filter matrix
+#   
+#   # Kalman Filter Fun
+#   # Inputs:
+#   # Z
+#   # Xbeta vector
+#   # Bmatrix
+#   #   Z = Xbeta + Balpha + delta + epsilon # Observed
+#   #   Y = Xbeta + Balpha + delta # process
+#   # P_00 = var(alpha_0)
+#   # Q = (U^-1)
+#   alpha_0 = 0
+#   
+#   U <- .sparseDiagonal(n=Size, x=0)
+#   
+#   alpha    <- vector(mode='list', length=N+1)
+#   P_ts     <- vector(mode='list', length=N+1) # P_t|s
+#   P_tt     <- vector(mode='list', length=N+1)
+#   alpha_ <- matrix(0, nrow=Size, ncol=1)
+#   P_ts[[1]]     <- K0
+#   P_tt[[1]]     <- K0
+#   
+#   # Consider pulling this out of the loop
+#   temp <- measure %>% ungroup %>% 
+#     mutate(species = factor(species, levels=species_levels)) %>%
+#     mutate( row = seq(1,n()), sigma_sq_y = sigma_sq_y[unclass(species)]) %>% 
+#     group_by(year) %>%
+#     split(., group_indices(.))    
+# 
+#   B <- basis*beta_1[site$species]
+#   # The slow way:
+#   eta_ts <- vector(mode='list', length=N+1)
+#   eta_tt <- vector(mode='list', length=N+1)
+#   delta_tt <- vector(mode='list', length=N+1)
+#   eta_tt[[1]] <- matrix(0, nrow=nrow(basis), ncol=1)
+#   for(t in 2:N+1){
+#     eta_ts <- rho * eta_tt[[t-1]] 
+#     #  design[temp[[t-1]]$row,] %*% beta_0 - 
+#     #  basis[temp[[t-1]]$ID,] %*% alpha_ts[[1]]
+#     D <- .sparseDiagonal(n = nrow(basis), x = sigma_sq_delta * beta_1[site$species] ) +
+#       .sparseDiagonal(n=nrow(basis), x=sigma_sq_y[site$species])
+#     # Cov of alpha_t|alpha_s
+#     P_ts[[t]] <- rho^2 * P_tt[[t-1]] + solve(Q)
+#     #this_basis <- basis*beta_1[site$species]
+#     # Cov of data locations
+#     #S <- B %*% P_ts[[t]] %*% t(B) + D
+#     # filter 
+#     #KH <- P_ts[[t]] %*% t(this_basis) %*% solve(S, this_basis)
+#     #KF <- diag(209)-KH # That is indeed p.d.
+#     
+#     # Repeat using Woodbury:
+# #    KH2 <- (P_ts[[t]] %*% t(B)) %*% 
+#       (solve(D,B) - solve(D) %*% B %*% solve( middle, t(B)) %*% solve(D,B))
+#     
+#     KF <- diag(209) - P_ts[[t]] %*% t(B) %*% 
+#                                   woodbury_solve(A=list(U=B, 
+#                                     Cinv=solve(P_ts[[t]]), D=D), 
+#                                   b=B)
+#     P_tt[[t]] <- KF %*% P_ts[[t]]
+#   }
+#   
+#   ####################################################################
+#   # Using the technique in Mcausland
+#   # Calculate prior variance on alpha1
+#   P1 <- .sparseDiagonal(n=Size, x=sigma_sq_1)
+#   P1inv <- .sparseDiagonal(n=Size, x=1/sigma_sq_1)
+#   # Calculate T * A_22 *T (refer to McCausland)
+#   TA22T <- rho^2 * Q
+#   
+#   A11 <- lapply(n, function(x) 
+#     sigma_sq_y[unclass(x$species)]/x$n + sigma_sq_delta * beta_1[unclass(x$species)])
+#   A11 <- lapply(A11, function(x) {x[!is.finite(x)] <- 0; return(x)})
+#   A11 <- lapply(A11, function(x) .sparseDiagonal(n=length(x), x=x))
+# 
+#   Omega_tt <- vector(mode='list', length=N)
+#   Omega_tt[[1]] <- t(B) %*% A11[[1]] %*% B + TA22T + P1inv
+#   for(t in 2:N){
+#     Omega_tt[[t]] <- t(B) %*% A11[[t]] %*% B + TA22T + Q
+#   }
+#   Omega_tt[[N]] <- t(B) %*% A11[[N]] %*%  B + Q
+#   
+#   # Precompute Omega_t,t+t
+#   Omega_tt1 <- -rho * Q  #(it's the same for every time period)
+# 
+#   # Precompute c (McCausland eqn 15.)
+#   c <- vector(mode='list', length=N)
+#   resid <- measure$prox - design * beta_0 
+#   for(i in 1:length(A11)) dimnames(A11[[i]]) <- list(site$ID, site$ID)
+#   for(t in 1:N){ 
+#     c[[t]] <- t(B) %*% A11[[t]][, sites.by.years[[t]]] %*% resid[rows.by.years[[t]]]
+#     }
+# 
+#   Chol_omega <- vector(mode='list', length=N)
+#   Chol_omega[[1]] <- Cholesky(Omega_tt[[1]], LDL=FALSE, perm=FALSE)
+#   # Note, that when following McCausland, that t(Omega_t-1,t) = Omega_tt1
+#   for(t in 2:N){
+#     temp <- Omega_tt[[t]] - 
+#       (Omega_tt1) %*% solve(Chol_omega[[t-1]], t(Omega_tt1), system='A')
+#     temp <- (temp +t(temp))/2
+#     # this is the same: but slower:
+#     # Omega_tt[[t]] - crossprod(solve(Chol_omega[[t-1]], t(Omega_tt1), system='L'))
+#     Chol_omega[[t]] <- Cholesky(((temp)), LDL=FALSE, perm=FALSE)
+#     #Chol_omega[[t]] <- chol(as.matrix(temp), permute=TRUE)
+#   }
+# 
+#   # LO = Lambda_t \ Omega_t1
+#   LO <- vector(mode='list', length=N)
+#   for(t in 1:N){LO[[t]] <- drop0((solve(Chol_omega[[t]], Omega_tt1, system='L')))}
+# 
+#   m <- vector(mode='list', length=N)
+#   m[[1]] <- solve(Chol_omega[[1]], c[[1]], system='A')
+#   for(t in 2:N){
+#     m[[t]] <- solve(Chol_omega[[t]], c[[t]] - Omega_tt1 %*% m[[t-1]])
+#   }
+#   
+#   #############################################
+#   # And here it is... simulate alpha
+#   alpha <- vector(mode='list', length=N)
+#   epsilon <- rnorm(n=nrow(Q))
+#   alpha[[N]] <- m[[N]] + solve(Chol_omega[[N]], epsilon, system='Lt')
+#   for(t in seq(N-1, 1, -1)){
+#     epsilon <- rnorm(n=nrow(Q))
+#     alpha[[t]] <- m[[t]] + solve(Chol_omega[[t]], epsilon - LO[[t]] %*% alpha[[t+1]], system='Lt')
+#   }
+#   alpha <- as.matrix(do.call(cBind, alpha))
+#   
+#   mc$alpha[mciter+1, ,] <- alpha
+#   
+#   ###################################################################
+#   # Update eta
+#   
+#   
+#   ###################################################################
+#   # Update rho
+#   c_rho <- sum(diag( t(alpha[,-N]-mu) %*% Q %*% (alpha[,-1]-mu)))
+#   V_rho <- 1 / sum(apply(alpha[,-N]-mu, 2, function(x) as.numeric(t(x) %*% Q %*% x)))
+#   rho <- msm::rtnorm(1, mean=V_rho*c_rho, sd=sqrt(V_rho), lower=0, upper=1)
+#   mc$rho[mciter+1] <- rho
+}
+```

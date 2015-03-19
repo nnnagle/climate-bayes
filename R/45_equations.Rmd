@@ -1,0 +1,140 @@
+---
+title: "sample Instrument and Proxy"
+author: "Nicholas Nagle"
+date: "February 13, 2015"
+output: pdf_document
+---
+
+Let this spatio-temporal field be denoted by $Z(s,t)$.  We will specifically be interested in the values $\{Z(s_1, t_1),\ldots, Z(s_N, t_N)\}$ at the $N$ space-time locations with data.  
+Further, let $Z_t(s_i);\ i=1,\ldots,n_t$ denote the hidden temperature values at the $t$-th time.
+It is common in spatial statistics (Katzfuss and Cressie) to decompose the field $Z_t$ as follows
+f$Z_t(s) = f_t(s)+\epsilon(s)$$ 
+where  $\epsilon_t(s)$ is a 
+
+$[Z|Y, X, \theta_1]$ observational data
+$[Y|\alpha, \theta_2]$ process data
+$[X|\theta_3]$ random effects process
+$[\alpha_t|\alpha_{t-1}, \rho, \theta_4]$ spatial evolution
+
+
+
+$[Z|Y, \beta, \Sigma_\epsilon] = N(\beta_0 + \beta_1 Y, \Sigma_\epsilon)$: measurements
+
+$[Y_t|X_t,  B_t, \Sigma_\delta] = N(B_t X_t, \Sigma_\delta)$: temperature field
+
+
+$\beta = B \alpha$
+
+$[\alpha|\tau] = N(0, K(\tau)^{-1})$: random coefficients
+
+$[\sigma^2_\epsilon] = IG(\nu_\epsilon, \lambda_\epsilon)$: prior on measurement variability
+
+$[\sigma^s_\delta]=IG(\nu_\delta, \lambda_\delta)$: prior on aspatial temperature variability
+
+$[\tau] = IG(\nu_\tau, \lambda_\tau)$: prior on variability of random coefficients
+
+$[\theta] = LN(\mu_\theta, \sigma^2_\theta)$: prior on spatial covariance
+
+$[X_0] = N(0,)$
+
+$$\sum_{k}\left(-\frac{n_k}{2}\log(\sigma_k^2) -\frac{1}{2 \sigma^2_k}\sum_{i\in n_k}(Z_{ik}-\beta_{ik,0}-\beta_{ik,1}Y_{ik})^2 \right)$$
+
+$$-\frac{N}{2}\log(\sigma_\delta^2) - \frac{1}{2\sigma^2_\delta} \sum_{i \in n}(Y_i - B_{i}X_i)^2$$
+
+$$\sum_{t=1}^T \frac{1}{2}\log(|Q|)-\frac{1}{2}\left((X_t - \rho X_{t-1})'Q(X_t -\rho X_{t-1})\right)$$
+
+$$\sum_k \left(\frac{1}{2}\log |K_k| - \frac{1}{2}(\beta_k - B_k \alpha_k)'K_k(\beta_k-B_k\alpha_k)\right)$$
+
+$$\log(\frac{\nu^{\lambda_k}_k}{\Gamma(\lambda_k)} (\sigma^2_k)^{-\lambda_k-1}\exp\left(\frac{-\nu_k}{\sigma^2_k}\right))$$
+
+$$\lambda_k\log(\nu_k)-\log\Gamma(\lambda_k) - (\lambda_k-1)\log(\sigma^2_k) - \frac{\nu_k}{\sigma^2_k}$$
+
+
+$$\log\pi(\mu_\theta, \sigma^2_\theta)$$
+
+It it helpful to rewrite the first two terms:
+$$\sum_{k}\left(-\frac{n_k}{2}\log(\sigma_k^2) -\frac{1}{2 \sigma^2_k}\sum_{i\in n_k}(Z_{ik}-B_{ik,0}\alpha_k-B_{ik,1}\alpha_kX_{ik} - B_{ik,1}\alpha_k \delta_{ik})^2 \right)$$
+
+
+
+$$-\frac{N}{2}\log(\sigma_\delta^2) - \frac{1}{2\sigma^2_\delta} \sum_{i \in n}(\delta_{ik})^2$$
+
+
+It is helpful to rewrite these in order to collect like terms:
+In terms of $X_{t}$ we have:
+$$-\sum_{t=1}^T \begin{bmatrix}Z_t - \beta_0 - \beta_1 X_t - \beta_1 \delta_t \\ X_t - \rho X_{t-1}\end{bmatrix}'\begin{bmatrix}\Sigma^{-1}_\epsilon & 0 \\ 0 & Q(\theta) \end{bmatrix}\begin{bmatrix}Z_t - \beta_0 - \beta_1 X_t - \beta_1 \delta_t \\ X_t - \rho X_{t-1}\end{bmatrix}$$
+
+
+
+$$(Z_t - B_{t,0}\alpha_0 - (B_{t,1}\alpha_1)\odot X_t)^\prime \Sigma^{-1}_{\epsilon, t}  (Z_t - B_{t,0}\alpha_0 - (B_{t,1}\alpha_1)\odot X_t) - $$
+$$( X_t - \rho X_{t-1})'Q(X_t-\rho X_{t-1}) - (X_{t+1}-\rho X_t)'Q(X_{t+1}-\rho X_t)$$ 
+
+First Derivatives:
+Denote by $H_{tk}$ the $N_t \times k$ matrix that maps the $k$ into the $n_t$ locations. 
+
+$$\frac{\partial}{\partial X_t} =  - (B_{t,1}\alpha_1) \odot I \Sigma^{-1}_{\epsilon, t}(Z_t - B_{t,0}\alpha_0 - (B_{t,1}\alpha_1)\odot X_t)-Q (X_t-\rho X_{t-1}) - \rho Q (X_{t+1}-\rho X_t)$$
+
+
+$$\frac{\partial}{\partial \beta_k} = -\sum_t X_t^\prime \Sigma^{-1}_{\epsilon, t} (Z_t - \tilde{X} \beta_k) - K(\beta_k - B_k \alpha_k)$$
+
+$$\frac{\partial}{\partial \rho} = \sum_{t=1}^N X_{t-1}^\prime Q (X_t - \rho X_{t-1})  $$
+Recall: $d \log |D| = |D| trace(D^{-1}(dD))$
+
+$$\frac{\partial}{\partial \theta_i} = \frac{T}{2}\mbox{trace}(Q^{-1}(\frac{dQ}{d\theta_i})) - \frac{1}{2} \sum_{t= 1}^T (X_t - \rho X_{t-1})^\prime \frac{dQ}{d\theta_i} (X_t - \rho X_{t-1})$$
+
+
+Second Derivatives:
+$$\frac{\partial^2}{\partial \alpha' \partial\alpha} = -\left(\sum_k(\tilde{X}^\prime_k \Sigma^{-1}_{\epsilon, k} \tilde{X}_k) + K\right)$$
+
+$$\frac{\partial^2}{\partial X_t \partial \alpha_{k,0}} = (B_{t,1}\alpha_1)\odot (\Sigma^{-1}_{\epsilon, t} B_{tk,0})$$
+
+$$\frac{\partial^2}{\partial X_t \partial \alpha_{k,1}} = (B_{t,1}\alpha_1)\odot (\Sigma^{-1}_{\epsilon, t} (B_{tk,1}\odot Z_t)) - B_{t,k,1} \odot (\Sigma^{-1}_{\epsilon, t} \epsilon_t)$$
+
+
+$$\frac{\partial^2}{\partial X_t^\prime \partial X_t} = (B_{t,1} \alpha_1) \odot \Sigma_{\epsilon, t}^{-1} \odot (B_{t,1}\alpha_1) - Q + \rho^2 Q$$
+
+$$\frac{\partial^2}{\partial X_t \partial X_{t-1}} = \rho Q $$
+
+$$\frac{\partial^2}{\partial \rho^2} = \sum_{t=1}^N X_{t-1}^\prime Q X_{t-1}$$
+
+
+
+Let $Z(s,t)$ be the spatio-temporal temperature field. This temperature field is the driver for instrument and proxy measurements at a finite set of locations: $\{(s_1, t_1),\ldots,(s_N, t_N)\}$. $Y(s,t)$.   The latent temperature field $Z$ follows a vector autoregressive process:
+$$\mathbf{Z}_t = \mathbf{B}_t\boldsymbol{\alpha}_t + \delta_t$$
+where $\delta_t\sim N(0, \sigma^2_\delta\mathbf{I})$ and 
+$$\boldsymbol{\alpha}_t = \rho \boldsymbol{\alpha}_{t-1}+\boldsymbol{\epsilon}_t$$ 
+with $\boldsymbol{\epsilon}\sim N(0, \mathbf{Q}^{-1})$.  
+The temperature field is specified as a Markov Random Field so that the precision matrix $\mathbf{Q}(\theta)$ is sparse.
+
+
+We can write the spatial precision as $Q=\phi_0^2 R(\phi_1)$.
+$$\log L(X, \rho, \phi_0^2, \phi_1) = \frac{NT}{2}\log(2 \pi \phi_0^2) + \frac{1}{2} \log |R(\phi_1)| - \frac{1}{2} \sum_{t=1}^T \left(X_t - \rho X_{t-1})\right)^\prime (\phi_0^2 R )\left(X_t - \rho X_{t-1})\right) $$
+
+$$\frac{\partial \log L}{\partial \rho} = \frac{1}{2} \sum_{t=1}^T X_{t-1} (\phi_0^2 R)(X_t - \rho X_{t-1})$$
+
+$$\frac{\partial \log L}{\partial \phi_0^2} = \frac{NT}{2 \phi_0^2 } - \frac{1}{2}\sum_{t=1}^T \left(X_t - \rho X_{t-1}\right)^\prime ( R )\left(X_t - \rho X_{t-1})\right)$$ 
+
+$$\frac{\partial \log L}{\partial \phi_1} = \mbox{trace}\left(R^{-1}\frac{dR}{d\phi_1}\right) - \phi_0^2\frac{1}{2}\sum_{t=1}^T \left(X_t - \rho X_{t-1}\right)^\prime \frac{dR}{d\phi_1} \left(X_t - \rho X_{t-1}\right)$$
+
+$$\frac{\partial^2 \log L}{\partial \phi_1^2} =- \mbox{trace}(R^{-1}\frac{dR}{d\phi_1}R^{-1}\frac{dR}{d\phi_1}) + \mbox{trace}(R^{-1}\frac{d^2 R}{d \phi_1^2}) - \frac{1}{2}\phi_0^2 \sum_{t=1}^T \left(X_t - \rho X_{t-1}\right)^\prime \frac{d^2 R}{d\phi_1^2} \left(X_t - \rho X_{t-1}\right)$$
+
+$$\frac{\partial^2 \log L}{\partial ()^2} = 
+\begin{bmatrix}\sum_{t=1}^T X_{t-1}^\prime (\phi_0^2 R) X_{t-1} & \sum_{t=1}^T X_{t-1}^{\prime}(R) \Delta_{t,t-1} & \sum_{t=1}^T X_{t-1}^{\prime}(\phi_0^2\frac{dR}{d\phi_1})\Delta_{t,t-1}\\
+\sum_{t=1}^T X_{t-1}^{\prime}R\Delta_{t,t-1} & -\frac{NT}{2 \phi_0^4} & -\frac{1}{2}\sum_{t=1}^T \Delta_{t,t-1}^\prime \frac{dR}{d\phi_1} \Delta_{t,t-1}\\
+\sum_{t=1}^T X_{t-1}^\prime (\phi_0^2 \frac{dR}{d\phi_1})\Delta_{t,t-1} &  -\frac{1}{2}\sum_{t=1}^T \Delta_{t,t-1}^\prime \frac{dR}{d\phi_1} \Delta_{t,t-1}& \frac{\partial^2}{\partial d \phi_1^2} \end{bmatrix}$$
+
+## Data Model
+
+We denote the measured data by $\{Y_{tk}i\}$, where $t$ indexes the time period and $k$ indexes the measurement type .  There is one measurement type for each tree species ($k=1,\ldots,n_{\mbox{species}}$) and one for the set of instrumental measurements.  
+The unknown temperature field at each location is indicated by the variable $Z_{t,k}$.
+The instrument and proxy data follow the linear model
+$$\mathbf{Y}_{t,k} = \boldsymbol{\beta}_{0,k} + \mathbf{Z}_{t,k}\boldsymbol{\beta}_{1,k} + \boldsymbol{\zeta}_{t,k}$$
+where the error follows a normal law $\boldsymbol{\zeta}_{t,k} \sim N(\mathbf{0}, \boldsymbol{\Sigma}_{\zeta, t,k})$. We simplify the notation by stacking the data and writing: $\mathbf{Y}_t = \mathbf{X}_t\boldsymbol{\beta}_0 + \mathbf{Z}_t\boldsymbol{\beta}_1 + \boldsymbol{\zeta}_t$. 
+For the time being, we simplify the variance matrix to be $\sigma^2_{\zeta,k}\boldsymbol{I}$.  
+Additionally, we will assume that there is no measurement error in the instrument record (i.e. $(\beta_{0,k},\ \beta_{1,k},\ \sigma^2_{k})=(0, 1, 0)$ for $k=$'instrument').  
+Measurement error in the instrument record is subsumed under the variance of the temperature field $Z_t$.
+
+I assume that the errors $\zeta$ have no temporal or spatial autocorrelation. 
+Temporal autocorrelation may be important for the tree species.
+
+
