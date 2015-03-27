@@ -230,8 +230,10 @@ sigma_sq_mu = 1e-12
 ```{r beta prior, eval=TRUE}
 neighbors <- bandSparse(n=k.lat+3-1, k=c(-1,1))*1.0
 Q.lat <- diag(rowSums(neighbors)) - neighbors
+Q.lat <- Q.lat %*% Q.lat # make a second order kernel
 Qneighbors <- bandSparse(n=k.yr+3-1, k=c(-1,1))*1.0
 Q.yr <- diag(rowSums(neighbors)) - neighbors
+Q.yr <- Q.yr %*% Q.yr #make a second order kernel
 rm(neighbors)
 # Create the precision matrices for the spatial field:
 fake.coords <- expand.grid(lat=seq(1,k.lat+3-1), year=seq(1,k.yr+3-1))
@@ -242,17 +244,17 @@ neighbors <- diag(rowSums(neighbors)) - neighbors
 Q.lat.year <- neighbors # this is the precision matrix of the field
 rm(fake.coords, fake.dist, neighbors)
 
-nu_lat <- 0.5
-lambda_lat <- .5
+nu_lat <- 0.5 # not used currently
+lambda_lat <- .5  # not used currently
 
-nu_year <- .5
-lambda_year <- .5
+nu_year <- .5 # not used currently
+lambda_year <- .5 # not used currently
 
-nu_lat_year <- .5
-lambda_lat_year <- .5
+nu_lat_year <- .5 # not used currently
+lambda_lat_year <- .5 # not used currently
 
-nu_beta <- .5 # prior on the spline intercept
-lambda_bet1 <- .5 # prior on the spline intercept
+nu.beta <- .5 # prior on the spline intercept
+lambda.beta <- .5 # prior on the spline intercept
 ```
 ## Sigma prior
 
@@ -263,8 +265,6 @@ lambda.y <- .5
 nu.delta <- .5
 lambda.delta <- .5
 
-nu.beta <- .5
-lambda.beta <- .5
 ```
 
 
@@ -390,7 +390,7 @@ Rcpp::sourceCpp('~/Dropbox/git_root/climate-bayes/R/ridgeRegression.cpp')
 ```{r grow MC object, eval=TRUE}
 #######################################################################
 # Markov Chain Loop
-NMC <- 1000
+NMC <- 2000
 start <- nrow(mc$theta)
 mc <- mcmc.resize(mc, NMC)
 # grow the mc save object
@@ -522,6 +522,7 @@ for(mciter in (start):(start+NMC-1)){
   rm(beta.0, beta.1)
   iter.df.by.years <- split(iter.df, iter.df$year)
   # Z_1 is beta1.basis
+  # multiply spatial basis by coefficient value
   beta1.basis <- mapply(function(x,y) return( x * y$beta.1 ), basis.by.years, iter.df.by.years)
   #   beta1.basis <- mapply(function(x,y) return(x * beta_1[y$species]), basis.by.years, measure.by.years)
   
@@ -715,10 +716,11 @@ for(mciter in (start):(start+NMC-1)){
       sigma_sq_y[spec] <-  MCMCpack::rinvgamma(1, lam, nu)
       
       ##################################################################
-      # Update tau_sq_beta
-      count = 1 # skip the intercept
-      mc$beta.0[mciter+1, spec] <- beta.sim[count]
-      mc$tau.0[mciter+1, spec] <- mc$tau.0[mciter, spec]
+      # Update all the  tau_sq_beta
+      count = 0 
+      mc$beta.0[mciter+1, spec] <- beta.sim[count+1]
+      mc$tau.0[mciter+1, spec] <- mc$tau.0[mciter, spec] # There is no prior on tau.0
+      count <- count+1
       
       nu <- nu.beta + sum(beta.sim[seq(count+1, count+ k.lat+3-1)]^2)
       lambda <- lambda.beta + k.lat+3-1
@@ -762,7 +764,7 @@ for(mciter in (start):(start+NMC-1)){
       count <- count+(k.lat+2)*(k.yr+2)
       
       
-    }else {
+    }else { # no coefficients for the instruments
       mc$beta.0[mciter+1, spec] <- 0
       mc$beta.1[mciter+1, spec] <- 1
     }

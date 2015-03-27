@@ -20,11 +20,11 @@ load('~/Dropbox/git_root/climate-bayes/data/itrdb_meta.Rdata')
 load('~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
 
 # Load the MCMC output
-load('~/Dropbox/git_root/climate-bayes/R/mcout.Rdata')
+load('~/Dropbox/git_root/climate-bayes/mcout.Rdata')
 
 # Determine "burn-in"
 burn <- 100
-keeps <- seq(from=2000, to = length(mc$rho), length=1000)
+keeps <- round(seq(from=1000, to = length(mc$rho), length=1000))
 ```
 
 # plot the posterior tree coefficients and tree locations 
@@ -45,6 +45,10 @@ coord_map(projection="mollweide") +
 geom_polygon( data=worldmap, aes(X,Y,group=PID), fill=NA, color="grey50" )
 print(plt)
 ggsave(filename="beta.pdf", plot=plt, width=11, height=8.5)
+
+
+plt <- ggplot(data=tree_loc) + geom_point(aes(x=-lon, y=lat, color=species_code))
+
 
 plt.data <- mc$beta.1[keeps,]
 plt.data <- as.data.frame(plt.data)
@@ -135,14 +139,14 @@ B.year.plt <- bs(x=years,
 
 
 beta.temp <- sweep(mc$beta.year.1, c(1,2), mc$beta.1, FUN='+')
-temp <- apply(beta.temp[-c(1:2000),,], c(1,2), function(x) as.vector(B.year.plt %*% x))
+temp <- apply(beta.temp[keeps,,], c(1,2), function(x) as.vector(B.year.plt %*% x))
 dimnames(temp) <- list(years=years, mc=seq(1,dim(temp)[2]), species=species_levels)
 # Flatten temp
 temp <- reshape2::melt(temp)
 
 temp2 <- temp %>% filter(species != "INST") %>% group_by(species, years) %>% summarize(m=mean(value), lo=quantile(value, .05), hi=quantile(value,.95))
 
-ggplot(temp2, aes(x=years)) + geom_ribbon(aes(ymin=lo, ymax=hi), fill='grey50') + geom_line(aes(y=m)) + facet_wrap(~species)
+ggplot(temp2, aes(x=years)) + geom_ribbon(aes(ymin=lo, ymax=hi), fill='grey50') + geom_line(aes(y=m)) + facet_wrap(~species) + coord_cartesian(ylim=c(-1,1)) + geom_abline(intercept=0, slope=0)
 ```
 
 
@@ -151,4 +155,35 @@ theta.df <- data.frame(theta1=mc$theta[,1], theta2=mc$theta[,2]) %>%
   mutate(logtau=(log(tau0)+theta1), logkappa=(log(kappa0)+theta2)) %>%
   mutate(range= sqrt(8)/exp(logkappa), sigma=1/(sqrt(4*pi)*exp(logtau+logkappa))) %>%
   dplyr::select(range, sigma) 
+```
+
+```{r}
+B.lat.plt <- vector('list', length(species_levels))
+names(B.lat.plt) <- species_levels
+for(s in species_levels[-1]){ 
+    these.trees <- measure %>% filter(species==s)
+    r <- range(these.trees$lat)
+    B.lat.plt[[s]] <- bs(x=seq(min(r), max(r), length=50), 
+                     knots=seq(r[1],r[2], length=k.lat)[-c(1,k.lat)],
+                     df=3,
+                     Boundary.knots=r, intercept=TRUE)
+    dimnames(B.lat.plt[[s]])[[2]] <- paste0('l', 1:(k.lat+3-1))
+    # cooerce to sparse
+    #attr(B.lat.plt[[s]], 'class') <- 'matrix'
+    attr(B.lat.plt[[s]], 'x') <- seq(min(r), max(r), length=50)
+ 
+}
+
+beta.temp <- sweep(mc$beta.lat.1, c(1,2), mc$beta.1, FUN='+')
+
+s <-10
+temp <- beta.temp[keeps,s,] %*% t(B.lat.plt[[s]])
+dimnames(temp) = list(mc=seq(1:nrow(temp)), lat=seq(1:50))
+# Flatten temp
+temp <- reshape2::melt(temp)
+temp2 <- temp %>% group_by(lat) %>% summarize(m=mean(value), lo=quantile(value, .05), hi=quantile(value,.95))
+temp2$lat <- attr(B.lat.plt[[s]], 'x')[unclass(temp2$lat)]
+
+ggplot(temp2, aes(x=lat)) + geom_ribbon(aes(ymin=lo, ymax=hi), fill='grey50') + geom_line(aes(y=m)) + coord_cartesian(ylim=c(-1,1)) + geom_abline(intercept=0, slope=0) +
+  geom_rug(data=tree_loc %>% filter(species==species_levels[s]), aes(x=lat))
 ```
