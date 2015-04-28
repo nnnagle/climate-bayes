@@ -17,12 +17,13 @@ spatial.coords <- ann.temp %>% distinct(station)
 # Let's keep all stations north of 40, and a subset of those south
 
 # Don't try this with more than about sample_n(600)
+set.seed(12345)
 spatial.subset <- bind_rows(spatial.coords %>% ungroup %>% filter(lat>50),
                         spatial.coords %>% ungroup %>% filter(lat<=50) %>% sample_n(600))
 spatial.subset %>% ggplot() + geom_point(aes(x=lon, y=lat))
 # convert lat lon to 3d coordinates:
 loc.cartesian <- inla.mesh.map(spatial.subset[, c('lon', 'lat')], projection='longlat')
-mesh2 = inla.mesh.2d(loc=loc.cartesian, max.edge=c(.06, .3), offset=c(0, -.2), cutoff=.06)
+mesh2 = inla.mesh.2d(loc=loc.cartesian, max.edge=c(.07, .3), offset=c(0, -.2), cutoff=.06)
 plot(mesh2)
 summary(mesh2)
 
@@ -53,10 +54,12 @@ ggplot(mesh.latlon) + geom_point(aes(x=lon, y=lat)) +
 A.inst <- spatial.coords %>% ungroup %>% select(lon, lat) %>% as.matrix %>% 
   inla.mesh.map(loc=., projection='longlat') %>% 
   inla.spde.make.A(mesh=mesh2, loc=.)
+dimnames(A.inst) <- list(spatial.coords$station, 1:ncol(A.inst))
 A.tree <- tree.meta %>% ungroup %>% select(lon, lat) %>% mutate(lon=-lon) %>%
   select(lon, lat) %>% as.matrix %>%
   inla.mesh.map(loc=., projection="longlat") %>%
   inla.spde.make.A(mesh=mesh2, loc=.)
-  
-save(A.tree, A.inst, mesh2, file='~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
+dimnames(A.tree) <- list(1:nrow(A.tree), 1:ncol(A.tree))
+save(A.tree, A.inst, mesh2, spatial.coords, file='~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
+
 

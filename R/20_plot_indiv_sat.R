@@ -71,6 +71,22 @@ ann.temp <- temp2 %>% ungroup %>% group_by(station) %>% arrange(year, month) %>%
   group_by(station, year2) %>%
   summarize(n=n(), sat=mean(sat-normal)) %>% filter(n==12) %>%
   inner_join(inst.meta)
-  
-save(ann.temp, file='~/Dropbox/git_root/climate-bayes/data/indiv.station.Rdata')
 
+# Calculate MAM temp
+spr.temp <- temp2 %>% ungroup %>% group_by(station) %>% arrange(year, month) %>% 
+  mutate(year2=lead(year,4)) %>% 
+  group_by(station, year2) %>% 
+  filter(month %in% c('mar','apr','may')) %>%
+  summarize(n=n(), sat=mean(sat-normal)) %>% filter(n==3) %>%
+  inner_join(inst.meta)
+# Calculate JJA temp
+sum.temp <- temp2 %>% ungroup %>% group_by(station) %>% arrange(year, month) %>% 
+  mutate(year2=lead(year,4)) %>% 
+  group_by(station, year2) %>% 
+  filter(month %in% c('jun','jul','aug')) %>%
+summarize(n=n(), sat=mean(sat-normal)) %>% filter(n==3) %>%
+  inner_join(inst.meta)
+
+save(ann.temp, file='~/Dropbox/git_root/climate-bayes/data/indiv.station.Rdata')
+save(spr.temp, file='~/Dropbox/git_root/climate-bayes/data/indiv.station.spring.Rdata')
+save(sum.temp, file='~/Dropbox/git_root/climate-bayes/data/indiv.station.sum.Rdata')

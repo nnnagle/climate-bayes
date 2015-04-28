@@ -59,7 +59,7 @@ N <- length(years)
 
 Create a flat dataframe for all measurement vars, with the columns:
 year, site, species, measure, count
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 # Process tree ring data here...
 # Create a flat data frame out of crn
 # For each chronology, create a dataframe with cols:
@@ -92,7 +92,7 @@ row.names(design) <- measure$ID
 Prepare the basis matrices.
 The basis matrix can be indexed by the `measurestation` variable
 
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 basis <- rBind(A.inst, A.tree)
 # Create a data.frame with site characteristics
 site <- data_frame(ID=row.names(basis)) %>% 
@@ -100,7 +100,7 @@ site <- data_frame(ID=row.names(basis)) %>%
             measure %>% distinct(ID) %>% select(ID, species))
 ```
 
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 # Parameters for the spde:
 sigma0 <- 1 # standard deviation
 range0 <- .8 # range
@@ -127,7 +127,7 @@ $\theta$ does not have a conjugate prior, and we simply specify it here as $\pi$
 
 Evaluate a good prior for theta.  I want to make sure that theta translates into good values for sigma and range:
 
-```{r eval=FALSE}
+```{r eval=TRUE}
 data.frame(theta1=rnorm(1000,0, sd=1/1), theta2=rnorm(1000, 0, 1/1)) %>% 
   mutate(logtau=(log(tau0)+theta1), logkappa=(log(kappa0)+theta2)) %>%
   mutate(range= sqrt(8)/exp(logkappa), sigma=1/(sqrt(4*pi)*exp(logtau+logkappa))) %>%
@@ -135,22 +135,22 @@ data.frame(theta1=rnorm(1000,0, sd=1/1), theta2=rnorm(1000, 0, 1/1)) %>%
 ```
 That seems good.
 
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 # Set precision:
 Q <- inla.spde2.precision(spde1, theta=c(0,0))
 ```
 
-```{r alpha 1 prior, eval=FALSE}
+```{r alpha 1 prior, eval=TRUE}
 mu_1 <- 0
 sigma_sq_1 <- 4
 ```
 
-```{r mu prior, eval=FALSE}
+```{r mu prior, eval=TRUE}
 mu_0 = 0
 sigma_sq_mu = 1e-12
 ```
 
-```{r beta prior, eval=FALSE}
+```{r beta prior, eval=TRUE}
 beta_0 = rep(1,18)
 sigma_sq_beta_0 = 3
 
@@ -159,17 +159,17 @@ sigma_sq_beta_1 = 3
 
 ```
 
-```{r prior on siga sq Instrument, eval=FALSE}
+```{r prior on siga sq Instrument, eval=TRUE}
 nu_I <- .5
 lambda_I <- .5
 ```
 
-```{r prior on sigma sq proxy, eval=FALSE}
+```{r prior on sigma sq proxy, eval=TRUE}
 nu_P <- .5
 lambda_P <- .5
 ```
 
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 # y has a 106 x 1 vector
 # alpha has a 580 x 1 vector
 # beta is the mean mu of alpha.
@@ -181,7 +181,7 @@ Size <- mesh2$n
 
 
 # Markov Chain Setup
-NMC <- 1
+NMC <- 10
 # Save the storage objects
 mc <- list(theta = matrix(NA, NMC, 2),
            alpha = array(NA, dim=c(NMC, Size, N)),
@@ -206,7 +206,7 @@ mc$sigma_y[1,] <-
 mc$sigma_y[1,] <- mc$sigma_y[1,] * (100^2)
 ```
 
-```{r eval=FALSE}
+```{r eval=TRUE}
 woodbury_solve <-  function(A, b){
   # Solve the equation Ax=b, 
   #   where A = UCV+D
@@ -232,10 +232,10 @@ woodbury_solve <-  function(A, b){
  Posterior Distribution
 s;jfkad;df
 
- ```{r eval=FALSE}
+ ```{r eval=TRUE}
  ```
 
- ```{r eval=FALSE}
+ ```{r eval=TRUE}
 #######################################################################
 # Markov Chain Loop
 NMC= 1
@@ -271,7 +271,7 @@ Observation <- lapply(Observation, function(x) sparseMatrix(i=1:length(x), j=x))
 rows.by.species <- split(1:nrow(measure), measure$species)
 ```
 
-```{r eval=FALSE}
+```{r eval=TRUE}
 for(mciter in (start):(start+NMC-1)){
   mu      <- mc$mu[mciter]
   rho     <- mc$rho[mciter]
