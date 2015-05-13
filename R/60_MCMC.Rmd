@@ -4,11 +4,8 @@ author: "Nicholas Nagle"
 date: "April 20, 2015"
 output: pdf_document
 ---
-Our approach to estimating the relationship between tree ring width and temperature is based on a hierarchical Bayesian model consisting of three levels: the *data level* describing the relationship between instrumental records and tree ring chronologies on temperature, year, and latitude, the *process level* describing the spatial-temporal evolution of temperature anomalies, and the *prior level* describing - where possible - diffuse and uninformative prior information about the model parameters.  
-
 ```{r load data, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
-rm(list=ls())
-save.files <- TRUE
+
 #gc()
 library(dplyr)
 library(tidyr)
@@ -18,366 +15,21 @@ library("mvtnorm")
 library(abind)
 library(splines)
 library(ff)
+options(fftempdir='/Users/nnagle/Dropbox/git_root/climate-bayes/R')
 
-# Load the sat data: as created in 20_plot_indiv.R
-load('~/Dropbox/git_root/climate-bayes/data/indiv.station.Rdata')
-# ann.temp is a data.frame with one row per station and columns for
-#   station, year, lat, lon, n is number of observations that year (a full year is 12)
-# sat is surface air temperature anomaly
-# Load the tree ring data:
-load('~/Dropbox/git_root/climate-bayes/data/itrdb_meta.Rdata')
-# two objects
-#   - tree.meta: a data.frame with one row per site.  lat, lon, etc
-#   - crn: a list of crn objects from dplr.  one object per site.
-# Load the spatial matrices that were created by 25_create_spatial_field.R
-load('~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
-# four objects:
-#   - mesh2: a spatial mesh object from INLA.  Basically, defines a TIN 
-#   - A.inst: the interpolation matrix for the instrument locations
-#   - A.tree: the interpolation matrix for the tree sites
-#   - spatial.coords: a subset of ann.temp with one record per station
-#   - 
-# Convert species_code to a facter
-tree.meta <- tree.meta %>% mutate(species = as.factor(species_code))
-
-# Count the number of distinct species:
-num.species <- nlevels(tree.meta$species)
-
-# Find number of years
-years <- seq(1850, 2010)
-  
-N <- length(years)
-
-```
-
-## Data Model
-
-
-We define the list of measured data to be $\{Z_{stk}\}$, where $s$ indexes the spatial location, $t$ indexes the time period and $k$ indexes the *measurement type*.
-We create one measurement type for each of the eighteen tree species ($k=1,\ldots,n_{\mbox{species}}$) and one additional measurement type for the instrumental record $k=\mbox{instrument}$.  
-All of the data, both instrument and proxy, are modeled by a simple linear regression:
-$${Z}_{stk} = {\beta}_{0,stk} + {Y}_{st}{\beta}_{1,stk} + {\epsilon}_{stk}$$
-where the error follows a normal distribution ${\epsilon}_{stk} \sim N({0}, {\sigma}_{\epsilon,stk})$.
-The unknown temperature value at each space-time location is indicated by the variable $Z_{st}$.
-The apparent simplicity of the data model is belied by the fact that the intercept and slope coefficients are allowed to vary through space and time and by measurement type.
-
-This variation of the intercept and slope through space and time is of crtical importance to dendrochronological studies.
-For instance, the divergence problem is a statement about the these coefficients: *divergence* between the dendrological and climate signals is equivalent to *convergence* of the parameter $\beta_1$ to zero.
-We can not allow the intercept and slope To be completely free, however.  This would result in more parameters than data.  We parameterize these coefficients using flexible but parsimonious spline functions over time and latitude, as described in the *process section.*
-
-The data model is completed by specifying a functional form for the error variance $\sigma^2_{\epsilon, stk}$.
-The error in the dendrochronologies may be due both to measurement error and to drivers of growth that are independent of temperature.
-The tree ring chronologies at each site are created as an average across all the individual trees at that site.
-Hence, it is plausible to model the precision of the chronology values as proportional to the number of trees $n_{stk}$.
-We thus model the space-time-site specific error variance as $\frac{\sigma^2_k}{n_{stk}}$.
-
-Additionally, we will assume that there is no measurement error in the instrument record records the exact temperature, i.e. (i.e. $(\beta_{0,k},\ \beta_{1,k},\ \sigma^2_{k})=(0, 1, 0)$ for $k=$'instrument').
-There is certainly measurement error in the instrument record (cite), thus this assumption should be questioned.
-We do not include measurement error, however, because it will statistically interfere with how we specify fine scale variation in the climate field, which we expect to be the more important source of variation.
-We return to this subject in the next section after we have more introduced our model for the temperature process.
-
-```{r, echo=FALSE}
-# Process tree ring data here...
-# Create a flat data frame out of crn
-# For each chronology, create a dataframe with cols:
-#  ID, species, year, rwi, n
-crn.df <- vector(mode='list', length=length(crn))
-for(i in 1:length(crn.df)){
-  crn.df[[i]] <- as_data_frame(crn[[i]])
-  names(crn.df[[i]]) <- c('rwi', 'n')
-  crn.df[[i]] <- data_frame(ID=as.character(i), species=tree.meta$species_code[i], 
-                            year=as.numeric(row.names(crn[[i]])),
-                            prox = crn.df[[i]]$rwi, n=crn.df[[i]]$n)
-}
-# Add lat and lon to crn.df (yes, it's redundant)
-tree.meta <- tree.meta %>% mutate(ID=as.character(seq(1, nrow(tree.meta))))
-crn.df <- left_join(bind_rows(crn.df), tree.meta %>% select(ID, lat, lon), by=c('ID'='ID')) 
-# Merge the instrument and proxy records:
-ann.temp <- ann.temp %>% ungroup %>% 
-	transmute(ID=station, species='INST', year=year2, prox=sat, n=1, lat=lat, lon=lon)
-measure <- bind_rows(ann.temp, bind_rows(crn.df)) %>% ungroup
-measure <- measure %>% filter(year %in% years)
-measure$UID <- seq(1,nrow(measure)) #Create a unique id
-# Create the species design matrix, rearranging so INST is first
-species_levels <- measure %>% filter(species != 'INST') %>% distinct(species) %>%
-  arrange(species) %>% .[['species']]
-species_levels <- c('INST', species_levels)
-
-measure <- measure %>% mutate(species = factor(species, levels=species_levels))
-design <-  sparse.model.matrix(~species-1, data=measure)
-row.names(design) <- measure$UID
-rm(crn.df, crn, i)
-
-```
-
-## Process Model
-
-The process model has two primary components, the spatio-temporal temperature field $Y_{st}$ and the regression coefficients $\beta_{0,stk}$ and $\beta_{1,stk}$ that measure the relationship between temperature and dendrochronologies.
-
-### The temperature process
-
-The temperature field $Y_{st}$ represents the *true* temperature value, measured in degrees (Celsius) of deviation from the 1950-1980 average.
-We desire temperature values at every data location, whether from an instrument of a dendrochronology.
-There are potentially `r nrow(A.inst)+nrow(A.tree)` such spatial locations, each of which may be repeated through time according to the availability of the instrumental or dendrochronological data.
-The number of final data observations is quite large - `r measure %>% filter(year %in% years) %>% nrow`.
-We employ a number of modeling strategies from the spatial statistics literature to make modeling the temperature at so many locations manageable.
-
-
-First, it is customary in the spatial statistics literature to decompose a spatial field into a spatially smooth component and a white noise component(cite). 
-Second, we adopt a "low rank" approximation for the spatial structure, modeling the spatial structure at relatively coarse resolution (scales of hundreds of km) (cite).
-Such low rank approximations allow the spatial structure to be modeled by a relatively small number of parameters.
-All spatial variation at finer resolution will be approximated by a white noise process.   
-
-There are many low-rank strategies (refs), we adopt one by Simpson (year) because it: (1) promises provable bounds on the error of the approximation, and more importantly (ii) models the low rank problem as a Gaussian Markov Random Field (GMRF), which have some attractive computational properties (Rue).
-Letting the entire vector of true temperature values at time $t$ be $\mathbf{Y}_t$, we write the spatial-temporal model for temperature as:
-$$\mathbf{Y}_t = \mathbf{B}_t \mathbf{X}_t + \boldsymbol{\delta}_t$$
-where $\mathbf{X}_t$ is a low rank set of coefficients that are associated with "knots" in space, $\mathbf{B}_t$ is an interpolating matrix mapping the the coefficient values at the spatial knots into temperature values at the data locations, and $\boldsymbol{\delta}_t$ is a vector of Gaussian white noise with variance $\sigma^2_\delta$.
-We point out that the instrumental and dendrological records depend on both the spatial component *and* the white noise component $\delta$ through the slope coefficient $\beta_1$.
-Figure XXX shows the locations of the knots in space.
-Temporal dynamics are incorporated into the system through the AR(1) model:
-$$\mathbf{X}_t = \rho \mathbf{X}_{t-1}+ \boldsymbol{\eta}_t,$$
-where $\boldsymbol{\eta}_t$ is multivariate normal with mean $\mathbf{0}$ and covariance $\mathbf{C}$.
-Thus, we can write the evolution of the knots as $$\mathbf{X}_t\ |\ \mathbf{X}_{t-1} \sim N(\rho \mathbf{X}_{t-1}, \mathbf{C})$$.  The covariance matrix is further parameterized by the vector of coefficients $\theta$ describing the strength and spatial range of spatial autocorrelation.
-
-To clarify the structure in this model we point out that, for fixed values of the intercepts and slopes in the data model, it is possible to write the observations $Z$ and temperature parameters $X$ as a state-space model:
-
-$$ \mathbf{Z}_{t}  = \boldsymbol{\beta}_{0} + \boldsymbol{\beta}_1 \mathbf{B}_t \mathbf{X}_t + \boldsymbol{\beta}_1 \delta_t + \boldsymbol{\epsilon}_t $$
-$$ \mathbf{X}_t = \rho \mathbf{X}_{t-1} + \boldsymbol{\eta}_t$$
-
-This format also makes clear why we have not included a measurement error $\epsilon$ for the instruments.
-For the instrumental data, $\delta$ and $\epsilon$ are not separately identifiable.
-Thus, any information about $\delta$ would have to come from the dendrochronologies, which have much less information about the temperature than do the instruments.
-Thus, it is useful to assume that one of these is zero.
-In general, we believe that the microscale variability captured by $\delta$ is much more significant that any instrumental measurement error, directly leading to our assumption in the previous section that  the instrumental error is zero.
-
-
-### The coefficient process
-
-The process model is completed by the specification of the varying coefficients $\beta_{0,stk}$ and $\beta_{1,stk}$ that measure the intercept and slope for the relation between temperature and standardized tree ring width.
-We model these as varying coefficients, which can be written as smooth functions over latitude and time; i.e. as $\beta_{1,stk} = \beta_{1,k} + f_k(\mbox{latitude}_s) + f_k(\mbox{year}_t)$, and similarly for $\beta_{0,stk}$.
-We model these smooth functions as univariate B-splines (Ruppert Wand and Carroll).
-For a given vector of *knots* discretizing the latitude range of a species and the range of years between 1850 and 2010, the $\mathbf{B_{sk}}$ be the set of basis functions that map the knots over latitudes into the spatial locations of the tree ring records, and let $\mathbf{B}_{tk}$ be the set of basis function that map the knots over year into the time locations of the tree records.
-The slope coefficients can the be written as:
-$$\beta_{1,stk} = \alpha_{1,k} + \mathbf{B}_{sk}\boldsymbol{\alpha}_{1,sk} + \mathbf{B}_{tk}\boldsymbol{\alpha}_{1,tk}$$
-The parameter $\alpha_{1,k}$ measures the overall "average" level of the slope.
-In order to guarantee identifiability, we enforce the constraints the spline components must sum to zero.
-The intercept coefficient $\beta_{0,stk}$ is similarly defined in terms of spline coefficients: $(\alpha_{0,k}, \boldsymbol{\alpha}_{0,sk}, \boldsymbol{\alpha}_{1,tk})$.
-
-
-```{r create  spatial basis and site data.frame, eval=TRUE}
-basis.map <- rBind(A.inst, A.tree)
-rm(A.inst, A.tree)
-# Create a data.frame with 1 row per site, and columns of 'ID' and 'species'
-site <- data_frame(ID=row.names(basis.map)) %>% 
-  left_join(., 
-            measure %>% distinct(ID) %>% select(ID, species))
-```
-
-```{r create beta basis matrix, eval=TRUE, warning=FALSE, message=FALSE}
-k.lat=10 # number of knots for latitude
-k.yr=10 # number of knots for year
-
-# Create smoothing matrices
-# http://www.math.ntnu.no/~hrue/reports/rw2-r1.pdf
-neighbors <- bandSparse(n=k.lat+3-1, k=c(-1,1))*1.0
-Q.lat <- diag(rowSums(neighbors)) - neighbors
-Q.lat <- Q.lat %*% Q.lat # make a second order kernel
-# Adjust edge effects
-Q.lat[1,1] <- 1; Q.lat[1,2] <- -2; Q.lat[2,1] <- -2; Q.lat[2,2] <- 5
-Q.lat[k.lat+3-1, k.lat+3-1] <- 1; Q.lat[k.lat+3-1, k.lat+3-2] <- -2
-Q.lat[k.lat+3-2, k.lat+3-1] <- -2; Q.lat[k.lat+3-2, k.lat+3-2] <- 5
-
-neighbors <- bandSparse(n=k.yr+3-1, k=c(-1,1))*1.0
-Q.yr <- diag(rowSums(neighbors)) - neighbors
-Q.yr <- Q.yr %*% Q.yr #make a second order kernel
-Q.yr[1,1] <- 1; Q.yr[1,2] <- -2; Q.yr[2,1] <- -2; Q.yr[2,2] <- 5
-Q.yr[k.yr+3-1, k.yr+3-1] <- 1; Q.yr[k.yr+3-1, k.yr+3-2] <- -2
-Q.yr[k.yr+3-2, k.yr+3-1] <- -2; Q.yr[k.yr+3-2, k.yr+3-2] <- 5
-rm(neighbors)
-
-spl.lat <- vector('list', length=num.species+1)
-names(spl.lat) <- species_levels
-spl.year <- vector('list', length=num.species+1)
-names(spl.year) <- species_levels
-
-for(s in species_levels[-1]){
-  these.trees <- measure %>% filter(species==s)
-  r <- range(these.trees$lat)
-  spl.lat[[s]]$knots <- seq(r[1],r[2], length=k.lat)[-c(1,k.lat)]
-  spl.lat[[s]]$range <- r
-  spl.lat[[s]]$basis <- bs(x=these.trees$lat, 
-                           knots=seq(r[1],r[2], length=k.lat)[-c(1,k.lat)],
-                           df=3,
-                           Boundary.knots=r, intercept=TRUE)
-  dimnames(spl.lat[[s]]$basis)[[1]] <- these.trees$UID
-  dimnames(spl.lat[[s]]$basis)[[2]] <- paste0('l', 1:(k.lat+3-1))
-  # cooerce to sparse
-  attr(spl.lat[[s]]$basis, 'class') <- 'matrix'
-  spl.lat[[s]]$basis <- drop0(spl.lat[[s]]$basis)
-  spl.lat[[s]]$S <- Q.lat # Smoothing matrix
-  # create constraint matrices... factor out intercept and trend
-  step <- seq(from=0, by=mean(diff(spl.lat[[s]]$knots)), length=k.lat+3-1)
-  step <- step - step[2] + r[1]
-  spl.lat[[s]]$con <- rbind(matrix(1, 1, k.lat+3-1), step) # constraint matrix
-  # Absorb constraint into knots:
-  QR.constraint <- qr(t(as.matrix(spl.lat[[s]]$con)))
-  spl.lat[[s]]$Zcon <- qr.Q(QR.constraint, complete=TRUE)[,-c(1:rankMatrix(spl.lat[[s]]$con))]
-  spl.lat[[s]]$ZSZ <- t(spl.lat[[s]]$Zcon ) %*% spl.lat[[s]]$S %*% spl.lat[[s]]$Zcon 
-  
-  r <- range(years)
-  # Note this will generate warnings, because someof the trees are before 1850.
-  #  We will pull these out later.
-  spl.year[[s]]$knots <- seq(r[1],r[2], length=k.yr)[-c(1,k.yr)]
-  spl.year[[s]]$range <- r
-  spl.year[[s]]$basis <- bs(x=these.trees$year, 
-                            knots=seq(r[1],r[2], length=k.yr)[-c(1,k.yr)],
-                            df=3,
-                            Boundary.knots=r, intercept=TRUE)
-  dimnames(spl.year[[s]]$basis)[[1]] <- these.trees$UID
-  dimnames(spl.year[[s]]$basis)[[2]] <- paste0('y', 1:(k.yr+3-1))
-  attr(spl.year[[s]]$basis, 'class') <- 'matrix'
-  spl.year[[s]]$basis <- drop0(spl.year[[s]]$basis)
-  
-  spl.year[[s]]$S <- Q.yr
-  step <- seq(from=0, by=mean(diff(spl.year[[s]]$knots)), length=k.yr+3-1)
-  step <- step - step[2] + r[1]
-  spl.year[[s]]$con <- rbind(matrix(1, 1, k.yr+3-1), step) # constraint matrix
-  # Absorb constraint into knots:
-  QR.constraint <- qr(t(as.matrix(spl.year[[s]]$con)))
-  spl.year[[s]]$Zcon <- qr.Q(QR.constraint, complete=TRUE)[,-c(1:rankMatrix(spl.year[[s]]$con))]
-  spl.year[[s]]$ZSZ <- t(spl.year[[s]]$Zcon ) %*% spl.year[[s]]$S %*% spl.year[[s]]$Zcon 
-}
-
-rm(Q.yr, Q.lat, r)
-
-```
-
-```{r}
-fixed.design <- vector('list', length=num.species+1)
-names(fixed.design) <- species_levels
-# create fixed effects matrices
-for(s in species_levels[-1]){
-  these.trees <- measure %>% filter(species==s)
-  fixed.design[[s]] <- these.trees %>% select(lat, year) %>% model.matrix(~lat+year, data=.)
-  fixed.design[[s]] <- cBind(fixed.design[[s]], 
-                             spl.lat[[s]]$basis %*% spl.lat[[s]]$Zcon,
-                             spl.year[[s]]$basis %*% spl.year[[s]]$Zcon)
-}
-```
-
-
-```{r create the spde, eval=TRUE}
-# Parameters for the spde:
-sigma0 <- 1 # standard deviation
-range0 <- .8 # range
-# convert into sigma and kappa
-kappa0 = sqrt(8)/range0
-tau0 = 1/(sqrt(4*pi)*kappa0*sigma0)
-
-spde1 <- inla.spde2.matern(mesh=mesh2,
-                           B.tau=cbind(log(tau0),1,0),
-                           B.kappa=cbind(log(kappa0), 0, 1),
-                           theta.prior.mean=c(0,0),
-                           theta.prior.prec=c(1,1))
-rm(sigma0, range0, kappa0, tau0)
 ```
 
 
 ```{r, eval=TRUE}
-# Set precision:
-Q <- inla.spde2.precision(spde1, theta=c(0,0))
+ffload(file='/Users/nnagle/Dropbox/git_root/climate-bayes/R/mcout.ff', overwrite=TRUE)
 ```
 
-```{r source thompson solver}
+```{r source thompson solver, eval=TRUE}
 Rcpp::sourceCpp('~/Dropbox/git_root/climate-bayes/R/thompson_forward.cpp')
 Rcpp::sourceCpp('~/Dropbox/git_root/climate-bayes/R/ridgeRegression.cpp')
 #Rcpp::sourceCpp('~/Dropbox/git_root/climate-bayes/R/sim_rho_cpp.cpp')
 ```
 
-
-
-```{r prior, eval=TRUE}
-prior <- NULL
-
-
-prior$mu_1 <- 0
-prior$sigma_sq_1 <- 2^2
-
-prior$nu_lat <- 0.5 # not used currently
-prior$lambda_lat <- .5  # not used currently
-
-prior$nu_year <- .5 # not used currently
-prior$lambda_year <- .5 # not used currently
-
-
-prior$nu.alpha <- .5 # prior on the spline intercept
-prior$lambda.alpha <- .5 # prior on the spline intercept
-
-prior$nu.epsilon <- .5
-prior$lambda.epsilon <- .5
-
-prior$nu.delta <- .5
-prior$lambda.delta <- .5
-
-prior$theta.mu <- c(0,0)
-prior$theta.sigma <- c(10,10)
-```
-
-$$[Z\ |\ X, \alpha, \sigma^2_\delta, \sigma^2_\epsilon][X\ |\ \rho, \sigma^2_\eta][\alpha\ |\ \sigma^2_\alpha]$$
-
-$$[Z\ |\ X, \sigma^2, \alpha] \sim N(\beta_0(\alpha) + \beta_1(\alpha)X, \beta_1^2\sigma_\delta + \sigma^2_\epsilon$$
-$$f(\sigma^2_\delta) = \frac{\beta^\alpha}{\Gamma(\alpha)} (\sigma^2_{\delta})^{-\alpha-1}\exp(-\frac{\beta}{\sigma^2_\delta})$$
-
-
-$$\frac{1}{(2\pi \sigma^2_\nu)^{n/2}}\exp -\frac{1}{\sigma^2_\nu}\sum_i (Z_i - \beta_{0i}-\beta{1i}X_i)^2$$
-$$\frac{\beta^\alpha}{\Gamma(\alpha)} (\sigma^2_{\delta})^{-\alpha-1}\exp(-\frac{\beta}{\sigma^2_\delta})$$
-## Initialize the mc object
-
-```{r initialize MC object, eval=TRUE}
-
-Size <- mesh2$n # number of spatial coords
-# Markov Chain Setup
-# Save the storage objects
-rm('mc.X.ffdata')
-mc <- list(theta = matrix(NA, 1, 2),# nugget and range of spatial covariance
-           mu = matrix(NA, 1, 1), # mean of random field (not used now)
-           rho = matrix(NA, 1,1), # AR component of temperature
-           # There are three fixed effects: costant, latitude and year
-           alpha.0 = array(NA, dim=c(1,num.species+1, 3)), # intercept by species
-           alpha.1 = array(NA, dim=c(1,num.species+1, 3)), #  slope by species
-           # The following terms define mean zero smooths of intercept and slope
-           alpha.lat.0 = array(0, dim=c(1, num.species+1, k.lat)), # Number of free parameters
-           alpha.year.0 = array(0, dim=c(1, num.species+1, k.yr)),
-           alpha.lat.1 = array(0, dim=c(1, num.species+1, k.lat)),
-           alpha.year.1 = array(0, dim=c(1, num.species+1, k.yr)),
-           sigma_delta    = matrix(NA, 1,1), #sd of delta
-           sigma.0          = matrix(10, 1, num.species+1), #sd of intercept
-           sigma.lat.0      = matrix(10,1, num.species+1), # sd of intercept smooths
-           sigma.year.0     = matrix(10, 1, num.species+1),
-           sigma.1          = matrix(10, 1, num.species+1), # sd of slope
-           sigma.lat.1      = matrix(10,1, num.species+1), # sd of slope smooths
-           sigma.year.1     = matrix(10, 1, num.species+1),
-           sigma_epsilon = matrix(10, 1, 19), #order matters
-           log_p_vec = matrix(0, 1, 11),
-           log_p = matrix(0, 1,1)) 
-mc.X <- ff(initdata=0.0, dim=c(1, Size, N), overwrite=TRUE)
-mc$theta[1,] <- c(0,0)
-mc.X[1,,] <- rep(0, Size*N)
-mc$mu[1] <- 0
-mc$alpha.0[1,1,] <- c(0,0,0) # no intecept for instruments
-mc$alpha.0[1,-1,] <- c(rep(1,18),rep(0,18),rep(0,18)) # all constant intercept for trees
-mc$alpha.1[1,,] <- c(1,0,0) # all constant slope for the instruments
-mc$alpha.1[1,-1,] <- 0 # no slope for the trees
-mc$rho[1] <- .8
-
-# Use variance of proxies for the initial sigma_y values.
-mc$sigma_delta[1] <- measure %>% ungroup %>% 
-    filter(species=='INST') %>% .[['prox']] %>% sd
-mc$sigma_epsilon[1,] <- 
-    c(0, # assume no extra error for measurements
-      rep(measure %>% ungroup %>% filter(species!='INST') %>% .[['prox']] %>% sd, 18))
-mc$sigma_epsilon[1,] <- mc$sigma_epsilon[1,] * (10^2)
-```
 
 ```{r mcmc.updater, eval=TRUE}
 mcmc.resize <- function(mc, N){
@@ -398,7 +50,7 @@ mcmc.resize <- function(mc, N){
 ```{r grow MC object, eval=TRUE}
 #######################################################################
 # Markov Chain Loop
-NMC <- 1000
+sprintf('NMC = %s', 500)
 start <- nrow(mc$theta)
 mc <- mcmc.resize(mc, NMC)
 # grow the mc save object
@@ -432,7 +84,7 @@ basis.by.years   <- lapply(sites.by.years, function(x) basis.map[x, ])
 uid.by.species <- split(measure$UID, measure$species)
 ```
 
-```{r eval=TRUE}
+```{r, eval=TRUE}
 
 # Last possible minute, create a rows.by.years lookup vector so we don't have to 
 #  do character matching in the loop.
@@ -598,8 +250,8 @@ for(mciter in (start):(start+NMC-1)){
       .5* (t(S.mat[,1]) %*% prec$P1inv %*% S.mat[,1]) - 
       sim$half.logdet
   }else ll_Z_rho_new <- -Inf
-  print(ll_Z_rho)
-  print(ll_Z_rho_new)
+#  print(ll_Z_rho)
+#  print(ll_Z_rho_new)
   accept <- as.numeric(exp( ll_Z_rho_new - ll_Z_rho ))
 #   print(accept)
 #   print(runif(1) < accept)
@@ -615,7 +267,7 @@ for(mciter in (start):(start+NMC-1)){
   mc$rho[mciter+1] <- state$rho
   if( (mciter %% 50) == 0) {# update adaptive mcmc object
     state.rho$accept=0
-    state.rho$sigma <- sqrt(2.38^2*(var(mc$rho[c(2:mciter),])+.001))
+    state.rho$sigma <- sqrt(2.38^2*(var(mc$rho[c(10:mciter),])))+.001
   }
   iter.df$BX <- X.to.df(basis.by.years, sim$X, rows.by.years)
   X.mat <- as.matrix(do.call(cBind, sim$X))
@@ -734,7 +386,7 @@ for(mciter in (start):(start+NMC-1)){
   mc$theta[mciter+1,] <- state$theta
   if( (mciter %% 50) == 0) {# update adaptive mcmc object
     state.theta$accept=0
-    state.theta$Sigma <- 2.38^2/2*(cov(mc$theta[-1,]) + diag(.10 * apply(mc$theta[-1,], 2, sd)))
+    state.theta$Sigma <- 2.38^2/2*(cov(mc$theta[c(10:mciter),]) + diag(.01 * apply(mc$theta[c(10:mciter),], 2, sd)))
   }
 
   # Update the iter.df object
@@ -795,9 +447,13 @@ for(mciter in (start):(start+NMC-1)){
                                 lp_sigma_delta, sum(lp_sigma_lat.0), sum(lp_sigma_lat.1), sum(lp_sigma_year.0),
                                 sum(lp_sigma_year.1))
   mc$log_p[mciter+1] <- lp_post
+  print(c( mc$rho[mciter+1], mc$theta[mciter+1,]))
   print(mciter)
 }
-save(list=ls(), file='mcout.Rdata')
+
+#save(list=ls(), file='mcout.Rdata')
+rm(NMC)
+ffsave(list=ls(), file='mcout.ff', rootpath='/Users/nnagle/Dropbox/git_root/climate-bayes/R')
 ```
 
 ```{r eval=FALSE}
