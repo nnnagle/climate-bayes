@@ -5,3 +5,6 @@ data/*
 .Rproj.user
 *.tex
 temp/*
+*.Rdata
+*.pdf
+*.ffData
