@@ -1,3 +1,4 @@
+conf/settings.json
 packrat/lib*/
 packrat/*
 data/*
