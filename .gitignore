@@ -8,3 +8,4 @@ temp/*
 *.Rdata
 *.pdf
 *.ffData
+.DS_Store
