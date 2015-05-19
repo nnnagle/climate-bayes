@@ -1,5 +1,4 @@
 # Send email
-require(sendmailR)
 library(mailR)
 #sendmail_options(smtpServer="ASPMX.L.GOOGLE.COM")
 settings <- jsonlite::fromJSON('~/Dropbox/git_root/climate-bayes/conf/settings.json')

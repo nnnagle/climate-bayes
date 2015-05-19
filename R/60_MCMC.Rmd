@@ -449,6 +449,7 @@ for(mciter in (start):(start+NMC-1)){
   mc$log_p[mciter+1] <- lp_post
   print(c( mc$rho[mciter+1], mc$theta[mciter+1,]))
   print(mciter)
+  warning(';kj;lj')
 }
 
 #save(list=ls(), file='mcout.Rdata')
