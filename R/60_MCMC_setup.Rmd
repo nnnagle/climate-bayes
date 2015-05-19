@@ -266,6 +266,9 @@ for(s in species_levels[-1]){
   fixed.design[[s]] <- cBind(fixed.design[[s]], 
                              spl.lat[[s]]$basis %*% spl.lat[[s]]$Zcon,
                              spl.year[[s]]$basis %*% spl.year[[s]]$Zcon)
+  attr(fixed.design[[s]], 'mean') <- colMeans(fixed.design[[s]])
+  fixed.design[[s]][,2] <- fixed.design[[s]][,2] - mean(fixed.design[[s]][,2])
+  fixed.design[[s]][,3] <- fixed.design[[s]][,3] - mean(fixed.design[[s]][,3])
 }
 ```
 
