@@ -90,3 +90,4 @@ summarize(n=n(), sat=mean(sat-normal)) %>% filter(n==3) %>%
 save(ann.temp, file='~/Dropbox/git_root/climate-bayes/data/indiv.station.Rdata')
 save(spr.temp, file='~/Dropbox/git_root/climate-bayes/data/indiv.station.spring.Rdata')
 save(sum.temp, file='~/Dropbox/git_root/climate-bayes/data/indiv.station.sum.Rdata')
+rm(list=ls())
