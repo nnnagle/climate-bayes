@@ -4,7 +4,7 @@ author: "Nicholas Nagle"
 date: "April 20, 2015"
 output: pdf_document
 ---
-```{r load data, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+```{r load data, echo=F, message=F, warning=F, results='hide'}
 
 #gc()
 library(dplyr)
@@ -16,12 +16,14 @@ library(abind)
 library(splines)
 library(ff)
 options(fftempdir='/Users/nnagle/Dropbox/git_root/climate-bayes/R')
-
+if(file.exists('/Users/nnagle/Dropbox/git_root/climate-bayes/R/mcmc.progress.out')) {
+  file.remove('/Users/nnagle/Dropbox/git_root/climate-bayes/R/mcmc.progress.out')
+}
 ```
 
 
 ```{r, eval=TRUE}
-ffload(file='/Users/nnagle/Dropbox/git_root/climate-bayes/R/mcout.ff', overwrite=TRUE)
+ffload(file='/Users/nnagle/Dropbox/git_root/climate-bayes/R/mcout_ff', overwrite=TRUE)
 ```
 
 ```{r source thompson solver, eval=TRUE}
@@ -470,11 +472,12 @@ for(mciter in (start):(start+NMC-1)){
   mc$log_p[mciter+1] <- lp_post
   print(c( mc$rho[mciter+1], mc$theta[mciter+1,]))
   print(mciter)
+  cat("iteration = ", mciter, "\n", file='/Users/nnagle/Dropbox/git_root/climate-bayes/R/mcmc.progress.out', append=TRUE)
 }
 
 #save(list=ls(), file='mcout.Rdata')
 rm(NMC)
-ffsave(list=ls(), file='mcout.ff', rootpath='/Users/nnagle/Dropbox/git_root/climate-bayes/R')
+ffsave(list=ls(), file='mcout_ff', rootpath='/Users/nnagle/Dropbox/git_root/climate-bayes/R')
 ```
 
 ```{r eval=FALSE}

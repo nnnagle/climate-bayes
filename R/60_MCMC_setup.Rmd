@@ -388,5 +388,5 @@ mc$sigma_epsilon[1,] <-
 mc$sigma_epsilon[1,] <- mc$sigma_epsilon[1,] * (10^2)
 
 rm(NMC)
-ffsave(list=ls(), file='mcout.ff', rootpath='/Users/nnagle/Dropbox/git_root/climate-bayes/R')
+ffsave(list=ls(), file='mcout_ff', rootpath='/Users/nnagle/Dropbox/git_root/climate-bayes/R')
 ```
