@@ -61,5 +61,5 @@ A.tree <- tree.meta %>% ungroup %>% select(lon, lat) %>% mutate(lon=-lon) %>%
   inla.spde.make.A(mesh=mesh2, loc=.)
 dimnames(A.tree) <- list(1:nrow(A.tree), 1:ncol(A.tree))
 save(A.tree, A.inst, mesh2, spatial.coords, file='~/Dropbox/git_root/climate-bayes/data/spatial_fields.Rdata')
-
+rm(list=ls())
 

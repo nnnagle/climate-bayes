@@ -28,7 +28,7 @@ load('~/Dropbox/git_root/climate-bayes/data/indiv.station.Rdata')
 # ann.temp is a data.frame with one row per station and columns for
 #   station, year, lat, lon, n is number of observations that year (a full year is 12)
 # sat is surface air temperature anomaly
-# Load the tree ring data:
+# Load the tree ring data that was created in 01_download_itrdb:
 load('~/Dropbox/git_root/climate-bayes/data/itrdb_meta.Rdata')
 # two objects
 #   - tree.meta: a data.frame with one row per site.  lat, lon, etc
