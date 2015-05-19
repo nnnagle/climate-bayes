@@ -140,6 +140,18 @@ X.to.df <- function(basis.by.years,X, rows.by.years){
     arrange(ID) %>% .[['ba']]  )
 }
 
+# log likelihood of MVN in canonical form:
+#http://user.it.uu.se/~thosc112/pubpdf/schonl2011.pdf
+ll_mvn_canonical <- function(x, Cinv, covector){
+  N <- length(x)
+  C <- Cholesky(Cinv)
+  lognum <- -.5 * t(covector) %*% solve(C, covector)
+  logden <- N/2 * log(2*pi) -  determinant(C, logarithm=TRUE)$modulus 
+  # determinant of factor already returns half
+  sse <- -.5* t(x) %*% Cinv %*% x + t(x) %*% covector
+  return(as.numeric(lognum - logden + sse))
+}
+
 # log likelihood of Z given X
 ll_Z_X <- function(df, col='BX'){
   resid <- df$prox - df$beta.0 - df$beta.1 * df[[col]]
@@ -149,7 +161,7 @@ ll_Z_X <- function(df, col='BX'){
 # log likelihood of X give rho and theta
 ll_X_rho.theta <- function(X, rho, Q){
   N <- ncol(X)
-  half.logdet <- (N-1)*determinant(Q, logarithm=TRUE)$modulus
+  half.logdet <- .5*(N-1)*determinant(Q, logarithm=TRUE)$modulus
   sse <- sum(apply( X[,-1] - rho * X[,-N], 2, 
               function(x) as.numeric(t(x) %*% Q %*% x)))
   return( as.numeric(half.logdet - .5 * sse ) )
@@ -173,9 +185,11 @@ state_sim <- function(thompson, Q){
     S[[t]] <- thompson$m[[t]] + backsolve(thompson$Lambda[[t]], epsilon, 
                                           upper.tri=FALSE, transpose=TRUE)
     half.logdet <- half.logdet + as.numeric(sum(log(diag(thompson$Lambda[[t]]))))
-    sse <- sse + as.numeric(t(X[[t]]-S[[t]]) %*% tcrossprod(thompson$Lambda[[t]]) %*% (X[[t]]-S[[t]]))
+    #sse <- sse + as.numeric(t(X[[t]]-S[[t]]) %*% tcrossprod(thompson$Lambda[[t]]) %*% (X[[t]]-S[[t]]))
+    # That sse is incorrect b/c it doesn't include off diagonal components
   }
-  return(list(X=X, S=S, sse=sse, half.logdet=half.logdet))
+#  return(list(X=X, S=S, sse=sse, half.logdet=half.logdet))
+  return(list(X=X, S=S,half.logdet=half.logdet))
 }
 
 precision_setup <- function(prior, state, Q, beta1.basis, iter.df.by.years){
@@ -216,9 +230,11 @@ precision_setup <- function(prior, state, Q, beta1.basis, iter.df.by.years){
 
 
 # Create state objects for adaptive sampling
-state.rho <- list(sigma=.1, accept=0)
+state.rho <- list(sigma=.05, accept=0)
 state.theta <- list(Sigma=diag(.08, 2), accept=0)
+```
 
+```{r, mcmc loop}
 
 for(mciter in (start):(start+NMC-1)){
   # 1. Update rho
@@ -233,22 +249,27 @@ for(mciter in (start):(start+NMC-1)){
   # Calculate log(f(Z | rho))
   iter.df$BS <- X.to.df(basis.by.years, sim$S, rows.by.years)
   S.mat <- as.matrix(do.call(cBind, sim$S))
+  # f(Z|rho) = f(Z|X)f(X|rho, theta)
   ll_Z_rho <- ll_Z_X(iter.df, 'BS') + ll_X_rho.theta(S.mat, state$rho, state$Q) -
     .5* (t(S.mat[,1]) %*% prec$P1inv %*% S.mat[,1]) - 
     sim$half.logdet
+  # f(rho|Z) = f(Z|rho)f(rho)/f(Z)
+  # f(Z|rho) = f(Z|X, rho)f(X|rho)/f(X|Z, rho) for any X
+  
+  # f(rho|Z) = f(Z|rho)f(rho) f(X|Z) / ( f(Z|X) f(X) )
   
   # Try a new rho
   state2 <- state; state2$rho <- rnorm(1,state$rho, sd=state.rho$sigma)
   if(state2$rho <= 1 & state2$rho >= -1){
-    prec <- precision_setup(prior, state2, state2$Q, state2$beta1.basis, iter.df.by.years)
-    thompson <- thompson_forward(prec$Omega_tt, lapply(prec$covec, as.matrix), as.matrix(prec$Omega_tt1))
+    prec2 <- precision_setup(prior, state2, state2$Q, state2$beta1.basis, iter.df.by.years)
+    thompson <- thompson_forward(prec2$Omega_tt, lapply(prec2$covec, as.matrix), as.matrix(prec2$Omega_tt1))
     sim2 <- state_sim(thompson, Q = state2$Q) 
     # Calculate log(f(Z | rho))
     iter.df$BS <- X.to.df(basis.by.years, sim2$S, rows.by.years)
     S.mat <- as.matrix(do.call(cBind, sim2$S))
     ll_Z_rho_new <- ll_Z_X(iter.df, 'BS') + ll_X_rho.theta(S.mat, state2$rho, state2$Q) -
-      .5* (t(S.mat[,1]) %*% prec$P1inv %*% S.mat[,1]) - 
-      sim$half.logdet
+      .5* (t(S.mat[,1]) %*% prec2$P1inv %*% S.mat[,1]) - 
+      sim2$half.logdet
   }else ll_Z_rho_new <- -Inf
 #  print(ll_Z_rho)
 #  print(ll_Z_rho_new)
@@ -449,7 +470,6 @@ for(mciter in (start):(start+NMC-1)){
   mc$log_p[mciter+1] <- lp_post
   print(c( mc$rho[mciter+1], mc$theta[mciter+1,]))
   print(mciter)
-  warning(';kj;lj')
 }
 
 #save(list=ls(), file='mcout.Rdata')
@@ -460,11 +480,21 @@ ffsave(list=ls(), file='mcout.ff', rootpath='/Users/nnagle/Dropbox/git_root/clim
 ```{r eval=FALSE}
 #quick plot of field
 plot.data <- data.frame(cbind(inla.mesh.map(loc=mesh2$loc, projection="longlat", inverse=FALSE),
-                              S.mat[,20]-S.mat[,19]))
+                              X.mat[,22]))
 names(plot.data) <- c('lon','lat', 'temp')
 ggplot(data=plot.data) + geom_point(aes(x=lon, y=lat, color=temp)) + 
   coord_map(projection = 'mollweide', orientation=c(110,-100,0)) +
   scale_color_gradient2(low=muted("blue"), high=muted("red"))
+
+# plot of lag-1 ac
+
+plot.data <- data.frame(cbind(inla.mesh.map(loc=mesh2$loc, projection="longlat", inverse=FALSE),
+                              apply(X.mat, 1, function(x) acf(x)$acf[2])))
+names(plot.data) <- c('lon','lat', 'ac')
+ggplot(data=plot.data) + geom_point(aes(x=lon, y=lat, color=temp)) + 
+  coord_map(projection = 'mollweide', orientation=c(110,-100,0)) +
+  scale_color_gradient()
+
 ```
 
 ```{r, eval=FALSE}
